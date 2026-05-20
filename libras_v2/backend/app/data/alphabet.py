@@ -1,0 +1,31 @@
+from app.models.schemas import LibrasSign
+
+# Alfabeto completo A-Z com dicas em português
+LIBRAS_ALPHABET: dict[str, LibrasSign] = {
+    "A": LibrasSign(id="A", letter="A", hint="Mão fechada, polegar ao lado.", image_url="/static/signs/alphabet/a.jpg"),
+    "B": LibrasSign(id="B", letter="B", hint="Mão aberta, polegar cruzando a palma.", image_url="/static/signs/alphabet/b.jpg"),
+    "C": LibrasSign(id="C", letter="C", hint="Mão em formato de semicírculo.", image_url="/static/signs/alphabet/c.jpg"),
+    "D": LibrasSign(id="D", letter="D", hint="Indicador para cima, outros dedos fechados.", image_url="/static/signs/alphabet/d.jpg"),
+    "E": LibrasSign(id="E", letter="E", hint="Dedos curvados sobre o polegar.", image_url="/static/signs/alphabet/e.jpg"),
+    "F": LibrasSign(id="F", letter="F", hint="Polegar e indicador unidos, outros abertos.", image_url="/static/signs/alphabet/f.jpg"),
+    "G": LibrasSign(id="G", letter="G", hint="Indicador apontando para frente.", image_url="/static/signs/alphabet/g.jpg"),
+    "H": LibrasSign(id="H", letter="H", hint="Indicador e médio apontando para frente.", image_url="/static/signs/alphabet/h.jpg"),
+    "I": LibrasSign(id="I", letter="I", hint="Mínimo levantado, mão fechada.", image_url="/static/signs/alphabet/i.jpg"),
+    "J": LibrasSign(id="J", letter="J", hint="Mínimo levantado com movimento de J.", image_url="/static/signs/alphabet/j.jpg"),
+    "K": LibrasSign(id="K", letter="K", hint="Indicador e médio em V, polegar entre eles.", image_url="/static/signs/alphabet/k.jpg"),
+    "L": LibrasSign(id="L", letter="L", hint="Polegar e indicador em L.", image_url="/static/signs/alphabet/l.jpg"),
+    "M": LibrasSign(id="M", letter="M", hint="Três dedos sobre o polegar.", image_url="/static/signs/alphabet/m.jpg"),
+    "N": LibrasSign(id="N", letter="N", hint="Dois dedos sobre o polegar.", image_url="/static/signs/alphabet/n.jpg"),
+    "O": LibrasSign(id="O", letter="O", hint="Dedos formando um O.", image_url="/static/signs/alphabet/o.jpg"),
+    "P": LibrasSign(id="P", letter="P", hint="Como K, mas apontando para baixo.", image_url="/static/signs/alphabet/p.jpg"),
+    "Q": LibrasSign(id="Q", letter="Q", hint="Como G, mas apontando para baixo.", image_url="/static/signs/alphabet/q.jpg"),
+    "R": LibrasSign(id="R", letter="R", hint="Indicador e médio cruzados.", image_url="/static/signs/alphabet/r.jpg"),
+    "S": LibrasSign(id="S", letter="S", hint="Mão fechada, polegar sobre os dedos.", image_url="/static/signs/alphabet/s.jpg"),
+    "T": LibrasSign(id="T", letter="T", hint="Polegar entre indicador e médio.", image_url="/static/signs/alphabet/t.jpg"),
+    "U": LibrasSign(id="U", letter="U", hint="Indicador e médio juntos para cima.", image_url="/static/signs/alphabet/u.jpg"),
+    "V": LibrasSign(id="V", letter="V", hint="Indicador e médio abertos em V.", image_url="/static/signs/alphabet/v.jpg"),
+    "W": LibrasSign(id="W", letter="W", hint="Três dedos abertos (indicador, médio, anelar).", image_url="/static/signs/alphabet/w.jpg"),
+    "X": LibrasSign(id="X", letter="X", hint="Indicador curvado como gancho.", image_url="/static/signs/alphabet/x.jpg"),
+    "Y": LibrasSign(id="Y", letter="Y", hint="Polegar e mínimo abertos (hang loose).", image_url="/static/signs/alphabet/y.jpg"),
+    "Z": LibrasSign(id="Z", letter="Z", hint="Indicador desenha Z no ar.", image_url="/static/signs/alphabet/z.jpg"),
+}
