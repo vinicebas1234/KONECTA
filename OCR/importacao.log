@@ -1,0 +1,23 @@
+2026-05-26 15:26:19,399 [INFO] ============================================================
+2026-05-26 15:26:19,399 [INFO]   IMPORTADOR DE DATASET LIBRAS
+2026-05-26 15:26:19,399 [INFO] ============================================================
+2026-05-26 15:26:19,399 [INFO]   Pasta       : C:\KONECTA\Datasets\videos UFPE (V-LIBRASIL)
+2026-05-26 15:26:19,399 [INFO]   Tipo        : dinamico
+2026-05-26 15:26:19,399 [INFO]   Sinais      : todos
+2026-05-26 15:26:19,399 [INFO]   Max/classe  : sem limite
+2026-05-26 15:26:19,400 [INFO]   Stride      : 2
+2026-05-26 15:26:19,400 [INFO]   Base dir    : C:\KONECTA\OCR
+2026-05-26 15:26:19,400 [INFO] ============================================================
+2026-05-26 15:26:19,400 [INFO] Inicializando detector MediaPipe...
+2026-05-26 15:53:33,357 [INFO] ============================================================
+2026-05-26 15:53:33,358 [INFO]   IMPORTADOR DE DATASET LIBRAS
+2026-05-26 15:53:33,358 [INFO] ============================================================
+2026-05-26 15:53:33,359 [INFO]   Pasta       : C:\KONECTA\Datasets\videos UFPE (V-LIBRASIL)\data
+2026-05-26 15:53:33,359 [INFO]   Tipo        : dinamico
+2026-05-26 15:53:33,359 [INFO]   Sinais      : todos
+2026-05-26 15:53:33,359 [INFO]   Max/classe  : sem limite
+2026-05-26 15:53:33,359 [INFO]   Stride      : 2
+2026-05-26 15:53:33,359 [INFO]   Base dir    : C:\KONECTA\OCR
+2026-05-26 15:53:33,360 [INFO] ============================================================
+2026-05-26 15:53:33,360 [INFO] Inicializando detector MediaPipe...
+2026-05-26 15:53:33,753 [WARNING] Nenhuma amostra foi importada. Verifique a estrutura da pasta e os vídeos.
