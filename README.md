@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🤟 KONECTA — Reconhecimento de Libras com Visão Computacional
 
 Projeto de Trabalho de Conclusão de Curso (TCC) focado no desenvolvimento de uma solução de **reconhecimento de sinais em Libras (Língua Brasileira de Sinais)** por meio de **Visão Computacional**, **Inteligência Artificial** e **Processamento de Imagens**.
@@ -300,3 +301,7 @@ Se desejar conhecer mais sobre o projeto ou trocar ideias sobre tecnologia, aces
 O **KONECTA** representa a união entre conhecimento acadêmico, desenvolvimento prático e impacto social.
 
 Mais do que um sistema de reconhecimento de Libras, este projeto demonstra como a tecnologia pode ser usada para criar soluções inclusivas, acessíveis e relevantes para a sociedade.
+=======
+# KONECTA
+Software para tradução simultânea de Libras x Português
+>>>>>>> 07168eed2c6602e0165ac6aca7c63dbc781f683d
