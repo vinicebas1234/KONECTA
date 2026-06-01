@@ -1,0 +1,67 @@
+version: '3'
+services:
+  vlibras-translator-api:
+    build: .
+    image: vlibras_translator/api:2.4.0
+    ports:
+      - "3000:3000"
+    networks:
+      - redis-net
+      - mongo-net
+      - rabbitmq-net
+    environment:
+      PORT: 3000
+      DB_HOST: mongo
+      DB_PORT: 27017
+      DB_NAME: "vlibras-db"
+      CACHE_HOST: redis
+      CACHE_PORT: 6379
+      CACHE_NAME: "vlibras-cache"
+      CACHE_SIZE: 104857600
+      CACHE_EXP: 604800
+      AMQP_PROTOCOL: amqp
+      AMQP_HOST: rabbitmq
+      AMQP_PORT: 5672
+      AMQP_USER: vlibras
+      AMQP_PASS: vlibras
+      TRANSLATOR_QUEUE: "translate.to_text"
+      VIDEOMAKER_QUEUE: "translate.to_video"
+      API_CONSUMER_QUEUE: "amq.rabbitmq.reply-to"
+    depends_on:
+      - redis
+      - mongo
+      - rabbitmq
+
+  redis:
+    image: redis:alpine
+    networks:
+      - redis-net
+    volumes:
+      - redis-data:/data
+
+  mongo:
+    image: mongo
+    networks:
+      - mongo-net
+    volumes:
+      - mongo-data:/data/db
+
+  rabbitmq:
+    image: rabbitmq:management-alpine
+    networks:
+      - rabbitmq-net
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: vlibras
+      RABBITMQ_DEFAULT_PASS: vlibras
+
+networks:
+  redis-net:
+  mongo-net:
+  rabbitmq-net:
+
+volumes:
+  redis-data:
+  mongo-data:
+  rabbitmq-data:
