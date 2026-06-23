@@ -1136,7 +1136,7 @@ class GerenciadorModelos:
 
         _, acc = model.evaluate(Xte, yte, verbose=0)
         pred = np.argmax(model.predict(Xte, verbose=0), axis=1)
-        report = classification_report(yte_s, pred, target_names=enc.classes_, zero_division=0)
+        report = classification_report(yte_s, pred, labels=list(range(n_classes)), target_names=enc.classes_, zero_division=0)
 
         self.modelo_dinamico = model
         self.encoder_dinamico = enc
