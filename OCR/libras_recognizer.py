@@ -1248,6 +1248,7 @@ class LibrasApp(tk.Tk):
         self.hold_pred = ""
         self.hold_start = 0.0
         self.seq_rec = []
+        self.hand_was_visible = False  # controla disparo de predição dinâmica
 
         # Debug/diagnóstico
         self.last_log_rec = 0.0
@@ -1782,6 +1783,7 @@ class LibrasApp(tk.Tk):
         self.hold_pred = ""
         self.hold_start = 0.0
         self.seq_rec = []
+        self.hand_was_visible = False
 
         self.btn_start_rec.configure(state=tk.DISABLED)
         self.btn_stop_rec.configure(state=tk.NORMAL)
@@ -1795,6 +1797,15 @@ class LibrasApp(tk.Tk):
         self.lbl_info.configure(text="⏹ Reconhecimento parado.", foreground=COR_YELLOW)
         self.lbl_pred.configure(text="—")
         self._log("⏹ Reconhecimento pausado")
+
+    def _confirmar_pred_direta(self, pred, conf):
+        """Confirmação imediata para gestos dinâmicos (disparada ao fim do gesto)."""
+        self._set_pred_label(pred, conf)
+        self.txt.insert(tk.END, pred + " ")
+        self.txt.see(tk.END)
+        self.hold_pred = ""
+        self.hold_start = 0.0
+        self._debug(f"Gesto dinâmico confirmado: {pred} ({conf:.2%})")
 
     def _confirmar_pred(self, pred, conf):
         self._set_pred_label(pred, conf)
@@ -1930,6 +1941,11 @@ class LibrasApp(tk.Tk):
                     pred, conf = None, 0.0
 
                     if tem_mao:
+                        # Mão apareceu agora: zera o buffer para começar gesto limpo
+                        if not self.hand_was_visible:
+                            self.seq_rec = []
+                        self.hand_was_visible = True
+
                         if modo in ("estatico", "ambos"):
                             p, c = self.modelos.prever_estatico(feats)
                             if p and c >= lim:
@@ -1937,14 +1953,6 @@ class LibrasApp(tk.Tk):
 
                         if modo in ("dinamico", "ambos"):
                             self.seq_rec.append(feats)
-                            # Manter no máximo 2× SEQUENCE_LENGTH para evitar crescimento infinito
-                            if len(self.seq_rec) > SEQUENCE_LENGTH * 2:
-                                self.seq_rec = self.seq_rec[-SEQUENCE_LENGTH:]
-                            if len(self.seq_rec) >= SEQUENCE_LENGTH:
-                                seq = np.array(self.seq_rec[-SEQUENCE_LENGTH:], dtype=np.float32)
-                                p, c = self.modelos.prever_dinamico(seq)
-                                if p and c >= lim and c > conf:
-                                    pred, conf = p, c
 
                         if pred:
                             self.after(0, lambda p=pred, c=conf: self._confirmar_pred(p, c))
@@ -1953,9 +1961,21 @@ class LibrasApp(tk.Tk):
 
                         if self.var_debug.get() and (time.time() - self.last_log_rec) > 2.0:
                             self.last_log_rec = time.time()
-                            self.after(0, self._log, f"[DEBUG] Reconhecimento ativo | modo={modo} | seq_len={len(self.seq_rec)}")
+                            self.after(0, self._log, f"[DEBUG] Reconhecendo | modo={modo} | frames={len(self.seq_rec)}")
+
                     else:
-                        self.seq_rec = []
+                        # Mão saiu: se estava visível e temos frames suficientes → predizer agora
+                        if self.hand_was_visible and modo in ("dinamico", "ambos"):
+                            if len(self.seq_rec) >= MIN_DYNAMIC_FRAMES:
+                                seq = np.array(self.seq_rec[-SEQUENCE_LENGTH:], dtype=np.float32)
+                                p, c = self.modelos.prever_dinamico(seq)
+                                if self.var_debug.get():
+                                    self.after(0, self._log, f"[DEBUG] Predição dinâmica: {p} ({c:.2%}) | frames={len(self.seq_rec)}")
+                                if p and c >= lim:
+                                    self.after(0, lambda p=p, c=c: self._confirmar_pred_direta(p, c))
+                            self.seq_rec = []
+
+                        self.hand_was_visible = False
                         self.after(0, lambda: self._set_pred_label("—", 0.0))
 
                 if self.coletando:
