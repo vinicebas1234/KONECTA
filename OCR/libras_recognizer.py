@@ -49,6 +49,7 @@ from sklearn.preprocessing import LabelEncoder
 
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+from mediapipe.framework.formats import landmark_pb2
 
 try:
     import matplotlib
@@ -158,7 +159,16 @@ def instalar_tensorflow(log_fn=None):
             log_fn(m)
 
     _log("📦 Iniciando instalação do TensorFlow via pip...")
-    cmd = [sys.executable, "-m", "pip", "install", "tensorflow", "--upgrade"]
+    cmd = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "tensorflow==2.16.1",
+        "numpy==1.26.4",
+        "ml-dtypes==0.3.2",
+        "--no-cache-dir"
+    ]
 
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -321,11 +331,12 @@ class DetectorMaos:
             min_hand_detection_confidence=MP_DET_CONF,
             min_tracking_confidence=MP_TRK_CONF,
         )
+
         self.detector = vision.HandLandmarker.create_from_options(options)
 
-        self.mp_hands = mp.tasks.vision.HandLandmarksConnections
-        self.mp_draw = mp.tasks.vision.drawing_utils
-        self.mp_style = mp.tasks.vision.drawing_styles
+        self.mp_draw = mp.solutions.drawing_utils
+        self.mp_style = mp.solutions.drawing_styles
+        self.mp_connections = mp.solutions.hands.HAND_CONNECTIONS
 
     def _debug(self, msg):
         if self.debug:
@@ -342,10 +353,18 @@ class DetectorMaos:
 
         if result.hand_landmarks:
             for hand_landmarks in result.hand_landmarks:
+                landmark_list = landmark_pb2.NormalizedLandmarkList()
+
+                for lm in hand_landmarks:
+                    landmark = landmark_list.landmark.add()
+                    landmark.x = lm.x
+                    landmark.y = lm.y
+                    landmark.z = lm.z
+
                 self.mp_draw.draw_landmarks(
                     annotated,
-                    hand_landmarks,
-                    self.mp_hands.HAND_CONNECTIONS,
+                    landmark_list,
+                    self.mp_connections,
                     self.mp_style.get_default_hand_landmarks_style(),
                     self.mp_style.get_default_hand_connections_style(),
                 )
@@ -354,20 +373,18 @@ class DetectorMaos:
 
     @staticmethod
     def _normalizar_mao(pts):
-        """Normalização robusta: centraliza no pulso e escala pela distância palma."""
+        """Normalização robusta: centraliza no pulso e escala pela distância da palma."""
         pts = pts.astype(np.float32).copy()
         center = pts[0].copy()
         pts -= center
 
-        # Escala por distância entre pulso(0) e base dedo médio(9)
         ref = np.linalg.norm(pts[9] - pts[0])
         if ref < 1e-6:
             ref = np.max(np.abs(pts))
         if ref < 1e-6:
             ref = 1.0
-        pts /= float(ref)
 
-        # Clamping para robustez
+        pts /= float(ref)
         pts = np.clip(pts, -3.0, 3.0)
         return pts
 
@@ -381,6 +398,7 @@ class DetectorMaos:
         for idx, hand in enumerate(result.hand_landmarks):
             if idx >= MP_MAX_HANDS:
                 break
+
             pts = np.array([[lm.x, lm.y, lm.z] for lm in hand], dtype=np.float32)
             pts = self._normalizar_mao(pts)
 
@@ -474,6 +492,9 @@ class GerenciadorDados:
 
         return arquivos
 
+    # Pastas internas que não representam sinais reais e devem ser ignoradas
+    _PASTAS_RESERVADAS = {"DATA", "TEMP", "BACKUP", "TEST", "RAW", "TMP", "DEBUG"}
+
     def _carregar_por_tipo(self, tipo):
         base = self._pasta_tipo(tipo)
         X, y, meta = [], [], []
@@ -484,6 +505,8 @@ class GerenciadorDados:
         for rotulo in sorted(os.listdir(base)):
             pasta_classe = os.path.join(base, rotulo)
             if not os.path.isdir(pasta_classe):
+                continue
+            if rotulo.upper() in self._PASTAS_RESERVADAS:
                 continue
 
             for caminho in self._listar_arquivos_npy(pasta_classe):
@@ -749,9 +772,21 @@ class GerenciadorModelos:
     # ──────────────────────────────────────────────────────────────────────────
     # ESTÁTICO (RandomForest)
     # ──────────────────────────────────────────────────────────────────────────
-    def treinar_estatico(self, X, y, meta, rotulos_prioritarios=None, peso_local=3.0, log=None):
+    def treinar_estatico(self, X, y, meta, rotulos_prioritarios=None, peso_local=3.0, min_amostras_por_classe=2, log=None):
         if len(X) == 0:
             return "❌ Nenhuma amostra estática encontrada."
+
+        # Filtrar classes com poucas amostras
+        min_n = max(2, int(min_amostras_por_classe))
+        cont_cls = Counter(y)
+        validas = {c for c, q in cont_cls.items() if q >= min_n}
+        if len(validas) < len(cont_cls) and log:
+            ignoradas = len(cont_cls) - len(validas)
+            log(f"⚠ Filtrando {ignoradas} classe(s) com menos de {min_n} amostras.")
+        X_f = [x for x, yl in zip(X, y) if yl in validas]
+        y_f = [yl for yl in y if yl in validas]
+        meta_f = [m for m, yl in zip(meta, y) if yl in validas]
+        X, y, meta = X_f, np.array(y_f), meta_f
 
         erro = self._validar_dataset(y)
         if erro:
@@ -816,38 +851,67 @@ class GerenciadorModelos:
     def _carregar_estatico(self):
         m = DIR_MODELOS / "modelo_estatico.pkl"
         e = DIR_MODELOS / "encoder_estatico.pkl"
+
         if m.exists() and e.exists():
-            with open(m, "rb") as f:
-                self.modelo_estatico = pickle.load(f)
-            with open(e, "rb") as f:
-                self.encoder_estatico = pickle.load(f)
+            try:
+                with open(m, "rb") as f:
+                    self.modelo_estatico = pickle.load(f)
+
+                with open(e, "rb") as f:
+                    self.encoder_estatico = pickle.load(f)
+
+            except Exception as exc:
+                print(f"Erro ao carregar modelo estático antigo: {exc}")
+                print("O modelo estático será ignorado. Treine novamente pela interface.")
+                self.modelo_estatico = None
+                self.encoder_estatico = None
+
 
     # ──────────────────────────────────────────────────────────────────────────
     # DINÂMICO (LSTM)
     # ──────────────────────────────────────────────────────────────────────────
-    def _criar_modelo_dinamico(self, n_classes):
-        model = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=(SEQUENCE_LENGTH, TOTAL_FEATURES)),
+    def _criar_modelo_dinamico(self, n_classes, n_amostras=0):
+        """Arquitetura adaptativa: modelo simpler quando há muitas classes e poucas amostras."""
+        amostras_por_classe = n_amostras / max(n_classes, 1)
 
-            tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(128, return_sequences=True)),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Dropout(0.30),
+        if n_classes > 50 or amostras_por_classe < 10:
+            # Dataset com muitas classes / poucas amostras por classe:
+            # modelo leve com GRU para evitar overfitting severo.
+            model = tf.keras.Sequential([
+                tf.keras.layers.Input(shape=(SEQUENCE_LENGTH, TOTAL_FEATURES)),
 
-            tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(256, return_sequences=True)),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Dropout(0.30),
+                tf.keras.layers.GRU(128, return_sequences=True),
+                tf.keras.layers.Dropout(0.40),
 
-            tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(256, return_sequences=False)),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Dropout(0.35),
+                tf.keras.layers.GRU(64, return_sequences=False),
+                tf.keras.layers.Dropout(0.40),
 
-            tf.keras.layers.Dense(128, activation="relu"),
-            tf.keras.layers.Dropout(0.25),
-            tf.keras.layers.Dense(n_classes, activation="softmax"),
-        ])
+                tf.keras.layers.Dense(128, activation="relu"),
+                tf.keras.layers.Dropout(0.35),
+                tf.keras.layers.Dense(n_classes, activation="softmax"),
+            ])
+            lr = 3e-4
+        else:
+            # Dataset menor com mais amostras por classe: BiLSTM completo.
+            model = tf.keras.Sequential([
+                tf.keras.layers.Input(shape=(SEQUENCE_LENGTH, TOTAL_FEATURES)),
+
+                tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(128, return_sequences=True)),
+                tf.keras.layers.BatchNormalization(),
+                tf.keras.layers.Dropout(0.30),
+
+                tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(256, return_sequences=False)),
+                tf.keras.layers.BatchNormalization(),
+                tf.keras.layers.Dropout(0.35),
+
+                tf.keras.layers.Dense(128, activation="relu"),
+                tf.keras.layers.Dropout(0.25),
+                tf.keras.layers.Dense(n_classes, activation="softmax"),
+            ])
+            lr = 1e-3
 
         model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+            optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
             loss="categorical_crossentropy",
             metrics=["accuracy"],
         )
@@ -894,12 +958,14 @@ class GerenciadorModelos:
         meta,
         rotulos_prioritarios=None,
         peso_local=3.0,
+        min_amostras_por_classe=2,
         log=None,
         progresso_epoca_cb=None,
     ):
         ok_tf, status_tf = verificar_tensorflow()
         if not ok_tf:
             return f"❌ TensorFlow não instalado/disponível.\n{status_tf}"
+
         if len(X) == 0:
             return "❌ Nenhuma amostra dinâmica encontrada."
 
@@ -907,7 +973,6 @@ class GerenciadorModelos:
         if erro:
             return erro
 
-        # Validação de sequências
         Xv, yv, metav = self._validar_sequencias_dinamicas(X, y, meta, log=log)
         if len(Xv) == 0:
             return "❌ Nenhuma sequência dinâmica válida após validação."
@@ -918,37 +983,92 @@ class GerenciadorModelos:
 
         pesos, prioridades = self._calcular_pesos_amostras(yv, metav, rotulos_prioritarios, peso_local)
 
+        min_n = max(2, int(min_amostras_por_classe))
+        contagem_classes = Counter(yv)
+        classes_validas = {classe for classe, qtd in contagem_classes.items() if qtd >= min_n}
+        ignoradas = len(contagem_classes) - len(classes_validas)
+        if ignoradas > 0 and log:
+            log(f"⚠ Filtrando {ignoradas} classe(s) com menos de {min_n} amostras (total={sum(q for c,q in contagem_classes.items() if c not in classes_validas)} amostras removidas).")
+
+        Xv_filtrado, yv_filtrado, metav_filtrado, pesos_filtrado = [], [], [], []
+
+        for x_item, y_item, meta_item, peso_item in zip(Xv, yv, metav, pesos):
+            if y_item in classes_validas:
+                Xv_filtrado.append(x_item)
+                yv_filtrado.append(y_item)
+                metav_filtrado.append(meta_item)
+                pesos_filtrado.append(peso_item)
+
+        Xv = np.array(Xv_filtrado, dtype=np.float32)
+        yv = np.array(yv_filtrado)
+        metav = metav_filtrado
+        pesos = np.array(pesos_filtrado, dtype=np.float32)
+
+        if len(Xv) == 0:
+            return "❌ Nenhuma sequência dinâmica válida após filtrar classes com poucas amostras."
+
+        if len(set(yv)) < 2:
+            return "❌ Após o filtro, restaram menos de 2 classes dinâmicas para treino."
+
         enc = LabelEncoder()
         y_enc = enc.fit_transform(yv)
         n_classes = len(enc.classes_)
 
+        qtd_amostras = len(Xv)
+        qtd_classes = n_classes
+        test_size_abs = max(int(qtd_amostras * 0.2), qtd_classes)
+
+        if test_size_abs >= qtd_amostras:
+            test_size_abs = max(1, qtd_amostras - qtd_classes)
+
+        if test_size_abs <= 0 or test_size_abs >= qtd_amostras:
+            return (
+                f"❌ Não há amostras suficientes para separar treino/teste.\n"
+                f"Amostras: {qtd_amostras} | Classes: {qtd_classes}\n"
+                f"Reduza a quantidade de classes ou colete mais amostras por classe."
+            )
+
+        if log:
+            log(f"📊 Classes dinâmicas após filtro: {qtd_classes}")
+            log(f"📊 Amostras dinâmicas após filtro: {qtd_amostras}")
+            log(f"📊 Tamanho do teste ajustado: {test_size_abs}")
+
         Xtr, Xte, ytr_s, yte_s, wtr, _, _, _ = train_test_split(
-            Xv, y_enc, pesos, metav, test_size=0.2, random_state=42, stratify=y_enc
+            Xv, y_enc, pesos, metav,
+            test_size=test_size_abs,
+            random_state=42,
+            stratify=y_enc
         )
 
-        # Normalização aprimorada (fit no treino)
         Xtr, Xte, media, std = self._normalizar_dinamico_train_test(Xtr, Xte)
         self.norm_media_din = media
         self.norm_std_din = std
 
-        # Data augmentation (somente treino)
-        Xtr_aug, ytr_aug, wtr_aug = self._aumentar_dataset_dinamico(Xtr, ytr_s, wtr, fator=1)
+        # Augmentation agressivo: quanto menos amostras por classe, mais aumentamos
+        amostras_por_classe = len(Xtr) / max(n_classes, 1)
+        fator_aug = 5 if amostras_por_classe < 5 else (3 if amostras_por_classe < 10 else 1)
+
+        Xtr_aug, ytr_aug, wtr_aug = self._aumentar_dataset_dinamico(Xtr, ytr_s, wtr, fator=fator_aug)
 
         ytr = tf.keras.utils.to_categorical(ytr_aug, n_classes)
         yte = tf.keras.utils.to_categorical(yte_s, n_classes)
 
+        # Batch size adaptativo
+        batch_size = min(64, max(16, len(Xtr_aug) // 50))
+
         if log:
-            log("🔄 Treinando LSTM (dinâmico)...")
+            log("🔄 Treinando modelo dinâmico...")
             log(f"📚 Dataset híbrido: {self._resumo_origens(metav)}")
             log(
-                f"🎯 Sinais locais priorizados: {', '.join(sorted(prioridades)) if prioridades else '(nenhum)'}"
+                f"🎯 Sinais locais priorizados: "
+                f"{', '.join(sorted(prioridades)) if prioridades else '(nenhum)'}"
                 f" | peso extra: {peso_local:.2f}x"
             )
-            log(f"🧪 Treino original: {len(Xtr)} | com augmentation: {len(Xtr_aug)}")
+            log(f"🧪 Treino original: {len(Xtr)} | com augmentation (fator={fator_aug}): {len(Xtr_aug)}")
             log(f"📐 Shape treino: {Xtr_aug.shape} | validação: {Xte.shape}")
+            log(f"⚙️  batch_size={batch_size} | amostras/classe≈{amostras_por_classe:.1f}")
 
-        model = self._criar_modelo_dinamico(n_classes)
-
+        model = self._criar_modelo_dinamico(n_classes, n_amostras=len(Xtr_aug))
         chk_path = DIR_MODELOS / "modelo_dinamico_best.keras"
 
         class EpochProgressCallback(tf.keras.callbacks.Callback):
@@ -970,11 +1090,9 @@ class GerenciadorModelos:
                 logs = logs or {}
                 dur = time.time() - self._ep_start
                 self.epoch_times.append(dur)
-
                 media_ep = float(np.mean(self.epoch_times)) if self.epoch_times else dur
                 faltam = max(self.total_epochs - (epoch + 1), 0)
                 eta = media_ep * faltam
-
                 loss = float(logs.get("loss", 0.0))
                 acc = float(logs.get("accuracy", 0.0))
                 val_loss = float(logs.get("val_loss", 0.0))
@@ -987,7 +1105,6 @@ class GerenciadorModelos:
                         f"val_loss={val_loss:.4f} val_acc={val_acc:.4f} | "
                         f"ETA ~ {eta/60:.1f} min"
                     )
-
                 if self.progress_fn:
                     self.progress_fn(epoch + 1, self.total_epochs, logs, eta)
 
@@ -995,27 +1112,22 @@ class GerenciadorModelos:
             tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=18, restore_best_weights=True),
             tf.keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=6, min_lr=1e-6, verbose=0),
             tf.keras.callbacks.ModelCheckpoint(
-                filepath=str(chk_path),
-                monitor="val_loss",
-                save_best_only=True,
-                save_weights_only=False,
-                verbose=0,
+                filepath=str(chk_path), monitor="val_loss",
+                save_best_only=True, save_weights_only=False, verbose=0,
             ),
             EpochProgressCallback(total_epochs=150, log_fn=log, progress_fn=progresso_epoca_cb),
         ]
 
         hist = model.fit(
-            Xtr_aug,
-            ytr,
+            Xtr_aug, ytr,
             epochs=150,
-            batch_size=32,
+            batch_size=batch_size,
             validation_data=(Xte, yte),
             callbacks=callbacks,
             sample_weight=wtr_aug,
             verbose=0,
         )
 
-        # Carrega melhor checkpoint, se existir
         if chk_path.exists():
             try:
                 model = tf.keras.models.load_model(chk_path)
@@ -1024,7 +1136,7 @@ class GerenciadorModelos:
 
         _, acc = model.evaluate(Xte, yte, verbose=0)
         pred = np.argmax(model.predict(Xte, verbose=0), axis=1)
-        report = classification_report(yte_s, pred, target_names=enc.classes_, zero_division=0)
+        report = classification_report(yte_s, pred, labels=list(range(n_classes)), target_names=enc.classes_, zero_division=0)
 
         self.modelo_dinamico = model
         self.encoder_dinamico = enc
@@ -1040,19 +1152,20 @@ class GerenciadorModelos:
         )
 
         grafico = self._plotar_historico(hist)
-
         msg = (
             "✅ MODELO DINÂMICO TREINADO\n"
             + f"Acurácia: {acc:.2%} | Épocas executadas: {len(hist.history.get('loss', []))}\n"
+            + f"Classes treinadas: {n_classes}\n"
+            + f"Amostras usadas: {qtd_amostras}\n"
             + f"Prioridades locais: {', '.join(sorted(prioridades)) if prioridades else '(nenhuma)'}\n"
         )
         if grafico:
             msg += f"📉 Gráfico salvo em: {grafico}\n"
         else:
             msg += "📉 Gráfico não gerado (matplotlib indisponível).\n"
-
         msg += "─" * 50 + "\n" + report
         return msg
+
 
     def prever_dinamico(self, sequencia):
         if self.modelo_dinamico is None or self.encoder_dinamico is None:
@@ -1278,7 +1391,8 @@ class LibrasApp(tk.Tk):
     def _config_treino_hibrido(self):
         rotulos = self.entry_prioritarios.get().strip().upper()
         peso_local = float(self.var_peso_local.get())
-        return rotulos, peso_local
+        min_amostras = int(self.var_min_amostras.get())
+        return rotulos, peso_local, min_amostras
 
     def _aba_treino(self):
         aba = ttk.Frame(self.nb, padding=15)
@@ -1298,6 +1412,13 @@ class LibrasApp(tk.Tk):
         self.lbl_peso_local = ttk.Label(cfg, text="3.00x", foreground=COR_PEACH)
         self.lbl_peso_local.pack(anchor=tk.E)
         self.var_peso_local.trace_add("write", lambda *_: self.lbl_peso_local.configure(text=f"{self.var_peso_local.get():.2f}x"))
+
+        ttk.Label(cfg, text="Mínimo de amostras por classe (filtra classes com poucos dados):").pack(anchor=tk.W, pady=(8, 0))
+        self.var_min_amostras = tk.IntVar(value=2)
+        fr_min = ttk.Frame(cfg)
+        fr_min.pack(fill=tk.X, pady=(2, 0))
+        for v in (2, 5, 10, 20):
+            ttk.Radiobutton(fr_min, text=str(v), variable=self.var_min_amostras, value=v).pack(side=tk.LEFT, padx=5)
 
         self.var_debug = tk.BooleanVar(value=False)
         ttk.Checkbutton(cfg, text="Modo debug (logs detalhados)", variable=self.var_debug).pack(anchor=tk.W, pady=(8, 0))
@@ -1348,9 +1469,9 @@ class LibrasApp(tk.Tk):
         cfg.pack(fill=tk.X, pady=(0, 10))
 
         ttk.Label(cfg, text="Limiar de confiança:").pack(anchor=tk.W)
-        self.var_conf = tk.DoubleVar(value=0.7)
+        self.var_conf = tk.DoubleVar(value=0.50)
         ttk.Scale(cfg, from_=0.3, to=0.99, variable=self.var_conf, orient="horizontal").pack(fill=tk.X)
-        self.lbl_conf = ttk.Label(cfg, text="0.70", foreground=COR_PEACH)
+        self.lbl_conf = ttk.Label(cfg, text="0.50", foreground=COR_PEACH)
         self.lbl_conf.pack(anchor=tk.E)
         self.var_conf.trace_add("write", lambda *_: self.lbl_conf.configure(text=f"{self.var_conf.get():.2f}"))
 
@@ -1578,7 +1699,7 @@ class LibrasApp(tk.Tk):
         self.lbl_treino_status.configure(text="Treino finalizado")
 
     def _treinar_estatico(self):
-        rotulos_prioritarios, peso_local = self._config_treino_hibrido()
+        rotulos_prioritarios, peso_local, min_amostras = self._config_treino_hibrido()
 
         def job():
             try:
@@ -1590,6 +1711,7 @@ class LibrasApp(tk.Tk):
                     meta,
                     rotulos_prioritarios=rotulos_prioritarios,
                     peso_local=peso_local,
+                    min_amostras_por_classe=min_amostras,
                     log=lambda s: self.after(0, self._log, s),
                 )
                 self.after(0, self._log, r)
@@ -1606,7 +1728,7 @@ class LibrasApp(tk.Tk):
         threading.Thread(target=job, daemon=True).start()
 
     def _treinar_dinamico(self):
-        rotulos_prioritarios, peso_local = self._config_treino_hibrido()
+        rotulos_prioritarios, peso_local, min_amostras = self._config_treino_hibrido()
 
         ok_tf, status = verificar_tensorflow()
         if not ok_tf:
@@ -1625,6 +1747,7 @@ class LibrasApp(tk.Tk):
                     meta,
                     rotulos_prioritarios=rotulos_prioritarios,
                     peso_local=peso_local,
+                    min_amostras_por_classe=min_amostras,
                     log=lambda s: self.after(0, self._log, s),
                     progresso_epoca_cb=lambda ep, total, logs, eta: self.after(
                         0, self._set_progresso_treino, ep, total, logs, eta
@@ -1681,10 +1804,12 @@ class LibrasApp(tk.Tk):
 
         if pred == self.hold_pred:
             if now - self.hold_start >= hold:
-                self.txt.insert(tk.END, pred)
+                self.txt.insert(tk.END, pred + " ")
                 self.txt.see(tk.END)
                 self.hold_pred = ""
                 self.hold_start = 0.0
+                # Limpar buffer para o próximo sinal começar sem contaminação dos frames anteriores
+                self.seq_rec.clear()
                 self._debug(f"Predição confirmada: {pred} ({conf:.2%})")
         else:
             self.hold_pred = pred
@@ -1812,6 +1937,9 @@ class LibrasApp(tk.Tk):
 
                         if modo in ("dinamico", "ambos"):
                             self.seq_rec.append(feats)
+                            # Manter no máximo 2× SEQUENCE_LENGTH para evitar crescimento infinito
+                            if len(self.seq_rec) > SEQUENCE_LENGTH * 2:
+                                self.seq_rec = self.seq_rec[-SEQUENCE_LENGTH:]
                             if len(self.seq_rec) >= SEQUENCE_LENGTH:
                                 seq = np.array(self.seq_rec[-SEQUENCE_LENGTH:], dtype=np.float32)
                                 p, c = self.modelos.prever_dinamico(seq)
