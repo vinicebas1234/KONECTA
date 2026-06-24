@@ -912,7 +912,7 @@ class GerenciadorModelos:
         )
 
         mdl = RandomForestClassifier(
-            n_estimators=500, max_depth=None,
+            n_estimators=100, max_depth=20,
             min_samples_leaf=1, random_state=42, n_jobs=-1
         )
         mdl.fit(Xtr, ytr, sample_weight=wtr)
