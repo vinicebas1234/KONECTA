@@ -45,6 +45,7 @@ from tkinter import ttk, messagebox, scrolledtext
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.model_selection import train_test_split
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import LabelEncoder
 
 from mediapipe.tasks import python
@@ -898,33 +899,33 @@ class GerenciadorModelos:
         return np.concatenate([seg1, seg2, seg3, vel]).astype(np.float32)
 
     def _treinar_dinamico_rf(self, Xv, yv, metav, pesos, prioridades, enc, n_classes, log):
-        """Treina RandomForest para sinais dinâmicos (ideal para poucos dados)."""
+        """KNN k=1 para sinais dinâmicos com poucas amostras.
+
+        Com 3 amostras/classe, classificadores tradicionais não generalizam.
+        KNN k=1 usa similaridade de cosseno para encontrar o template mais
+        parecido — funciona bem mesmo com 1-3 exemplos por classe.
+        Treina em TODAS as amostras (sem split) para maximizar cobertura.
+        """
         if log:
-            log("🌲 Modo RF ativado (poucas amostras/classe — RF supera rede neural neste cenário).")
+            log("🔍 Modo KNN ativado (poucas amostras/classe — busca pelo template mais similar).")
+            log(f"📦 Armazenando {len(Xv)} templates de {n_classes} sinais...")
 
         X_feat = np.array([self._extrair_features_seq(s) for s in Xv], dtype=np.float32)
-
         y_enc = enc.transform(yv)
-        Xtr, Xte, ytr, yte, wtr, _, _, _ = train_test_split(
-            X_feat, y_enc, pesos, metav,
-            test_size=max(int(len(X_feat) * 0.2), n_classes),
-            random_state=42, stratify=y_enc
-        )
 
-        mdl = RandomForestClassifier(
-            n_estimators=100, max_depth=20,
-            min_samples_leaf=1, random_state=42, n_jobs=-1
-        )
-        mdl.fit(Xtr, ytr, sample_weight=wtr)
+        # k=1: retorna o sinal mais parecido. Cosine é robusto para features de alta dimensão.
+        mdl = KNeighborsClassifier(n_neighbors=1, metric="cosine", algorithm="brute", n_jobs=-1)
+        mdl.fit(X_feat, y_enc)
 
-        pred = mdl.predict(Xte)
-        acc = accuracy_score(yte, pred)
-        report = classification_report(
-            yte, pred,
-            labels=list(range(n_classes)),
-            target_names=enc.classes_,
-            zero_division=0
-        )
+        # Avaliação leave-one-out rápida (só possível com todos os dados)
+        corretos = 0
+        for i in range(len(X_feat)):
+            # Ignora o próprio exemplo (simula LOO)
+            dists, idxs = mdl.kneighbors(X_feat[i:i+1], n_neighbors=min(4, len(X_feat)))
+            vizinhos = [(d, y_enc[j]) for d, j in zip(dists[0], idxs[0]) if j != i]
+            if vizinhos and vizinhos[0][1] == y_enc[i]:
+                corretos += 1
+        acc_loo = corretos / len(X_feat) if X_feat.size else 0.0
 
         self.modelo_dinamico_rf = mdl
         self.encoder_dinamico_rf = enc
@@ -935,21 +936,26 @@ class GerenciadorModelos:
             pickle.dump(enc, f)
 
         return (
-            "✅ MODELO DINÂMICO (RF) TREINADO\n"
-            f"Acurácia: {acc:.2%} | Classes: {n_classes} | Amostras: {len(Xv)}\n"
+            "✅ MODELO DINÂMICO (KNN) TREINADO\n"
+            f"Acurácia LOO: {acc_loo:.2%} | Classes: {n_classes} | Templates: {len(Xv)}\n"
             f"Prioridades locais: {', '.join(sorted(prioridades)) if prioridades else '(nenhuma)'}\n"
-            + "─" * 50 + "\n" + report
+            "─" * 50 + "\n"
+            "Pronto para reconhecer. Faça o sinal e retire a mão da câmera.\n"
         )
 
     def prever_dinamico_rf(self, sequencia):
-        """Predição via RandomForest (usa features temporais, sem necessidade de TF)."""
+        """Predição via KNN k=1 (similaridade de cosseno com templates armazenados)."""
         if self.modelo_dinamico_rf is None or self.encoder_dinamico_rf is None:
             return None, 0.0
         try:
             feat = self._extrair_features_seq(sequencia).reshape(1, -1)
-            proba = self.modelo_dinamico_rf.predict_proba(feat)[0]
-            i = int(np.argmax(proba))
-            return self.encoder_dinamico_rf.classes_[i], float(proba[i])
+            dist, idx = self.modelo_dinamico_rf.kneighbors(feat, n_neighbors=1)
+            distancia = float(dist[0][0])   # distância cosseno: 0 = idêntico, 2 = oposto
+            y_pred = int(self.modelo_dinamico_rf._y[idx[0][0]])
+            rotulo = self.encoder_dinamico_rf.classes_[y_pred]
+            # Converte distância em confiança: dist=0 → conf=1.0, dist=1 → conf=0.0
+            confianca = max(0.0, 1.0 - distancia)
+            return rotulo, confianca
         except Exception:
             return None, 0.0
 
