@@ -556,14 +556,22 @@ class GerenciadorDados:
 class GerenciadorModelos:
     """Treino, inferência e persistência dos modelos estático/dinâmico."""
 
+    # Limiar: abaixo disso usa RF em vez de rede neural
+    _MIN_AMOSTRAS_LSTM = 10
+
     def __init__(self):
         self.modelo_estatico = None
         self.encoder_estatico = None
 
+        # Modelo dinâmico por rede neural (LSTM/GRU) — para muitas amostras
         self.modelo_dinamico = None
         self.encoder_dinamico = None
         self.norm_media_din = None
         self.norm_std_din = None
+
+        # Modelo dinâmico por RandomForest — para poucas amostras (≥ 3 basta)
+        self.modelo_dinamico_rf = None
+        self.encoder_dinamico_rf = None
 
         self._carregar_estatico()
         self._carregar_dinamico()
@@ -868,6 +876,98 @@ class GerenciadorModelos:
 
 
     # ──────────────────────────────────────────────────────────────────────────
+    # DINÂMICO — features temporais (usadas pelo RF e pelo KNN)
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _extrair_features_seq(seq):
+        """Converte sequência (N×126) em vetor fixo de features temporais.
+
+        Divide em 3 segmentos temporais, calcula média de cada um e
+        a velocidade média (diferença entre frames consecutivos).
+        Resultado: 126×4 = 504 features.
+        """
+        seq = GerenciadorModelos._pad_or_crop_sequence(
+            np.asarray(seq, dtype=np.float32), SEQUENCE_LENGTH
+        )
+        n3 = SEQUENCE_LENGTH // 3
+        seg1 = seq[:n3].mean(axis=0)           # início do gesto
+        seg2 = seq[n3: 2 * n3].mean(axis=0)   # meio
+        seg3 = seq[2 * n3:].mean(axis=0)       # fim
+        vel = np.diff(seq, axis=0).mean(axis=0)  # velocidade média entre frames
+        return np.concatenate([seg1, seg2, seg3, vel]).astype(np.float32)
+
+    def _treinar_dinamico_rf(self, Xv, yv, metav, pesos, prioridades, enc, n_classes, log):
+        """Treina RandomForest para sinais dinâmicos (ideal para poucos dados)."""
+        if log:
+            log("🌲 Modo RF ativado (poucas amostras/classe — RF supera rede neural neste cenário).")
+
+        X_feat = np.array([self._extrair_features_seq(s) for s in Xv], dtype=np.float32)
+
+        y_enc = enc.transform(yv)
+        Xtr, Xte, ytr, yte, wtr, _, _, _ = train_test_split(
+            X_feat, y_enc, pesos, metav,
+            test_size=max(int(len(X_feat) * 0.2), n_classes),
+            random_state=42, stratify=y_enc
+        )
+
+        mdl = RandomForestClassifier(
+            n_estimators=500, max_depth=None,
+            min_samples_leaf=1, random_state=42, n_jobs=-1
+        )
+        mdl.fit(Xtr, ytr, sample_weight=wtr)
+
+        pred = mdl.predict(Xte)
+        acc = accuracy_score(yte, pred)
+        report = classification_report(
+            yte, pred,
+            labels=list(range(n_classes)),
+            target_names=enc.classes_,
+            zero_division=0
+        )
+
+        self.modelo_dinamico_rf = mdl
+        self.encoder_dinamico_rf = enc
+
+        with open(DIR_MODELOS / "modelo_dinamico_rf.pkl", "wb") as f:
+            pickle.dump(mdl, f)
+        with open(DIR_MODELOS / "encoder_dinamico_rf.pkl", "wb") as f:
+            pickle.dump(enc, f)
+
+        return (
+            "✅ MODELO DINÂMICO (RF) TREINADO\n"
+            f"Acurácia: {acc:.2%} | Classes: {n_classes} | Amostras: {len(Xv)}\n"
+            f"Prioridades locais: {', '.join(sorted(prioridades)) if prioridades else '(nenhuma)'}\n"
+            + "─" * 50 + "\n" + report
+        )
+
+    def prever_dinamico_rf(self, sequencia):
+        """Predição via RandomForest (usa features temporais, sem necessidade de TF)."""
+        if self.modelo_dinamico_rf is None or self.encoder_dinamico_rf is None:
+            return None, 0.0
+        try:
+            feat = self._extrair_features_seq(sequencia).reshape(1, -1)
+            proba = self.modelo_dinamico_rf.predict_proba(feat)[0]
+            i = int(np.argmax(proba))
+            return self.encoder_dinamico_rf.classes_[i], float(proba[i])
+        except Exception:
+            return None, 0.0
+
+    def _carregar_dinamico_rf(self):
+        m = DIR_MODELOS / "modelo_dinamico_rf.pkl"
+        e = DIR_MODELOS / "encoder_dinamico_rf.pkl"
+        if m.exists() and e.exists():
+            try:
+                with open(m, "rb") as f:
+                    self.modelo_dinamico_rf = pickle.load(f)
+                with open(e, "rb") as f:
+                    self.encoder_dinamico_rf = pickle.load(f)
+            except Exception as exc:
+                print(f"Erro ao carregar modelo dinâmico RF: {exc}")
+                self.modelo_dinamico_rf = None
+                self.encoder_dinamico_rf = None
+
+    # ──────────────────────────────────────────────────────────────────────────
     # DINÂMICO (LSTM)
     # ──────────────────────────────────────────────────────────────────────────
     def _criar_modelo_dinamico(self, n_classes, n_amostras=0):
@@ -1011,11 +1111,24 @@ class GerenciadorModelos:
             return "❌ Após o filtro, restaram menos de 2 classes dinâmicas para treino."
 
         enc = LabelEncoder()
-        y_enc = enc.fit_transform(yv)
+        enc.fit(yv)
         n_classes = len(enc.classes_)
-
         qtd_amostras = len(Xv)
         qtd_classes = n_classes
+
+        amostras_por_classe = qtd_amostras / max(qtd_classes, 1)
+
+        if log:
+            log(f"📊 Classes dinâmicas: {qtd_classes} | Amostras: {qtd_amostras}")
+            log(f"📊 Média amostras/classe: {amostras_por_classe:.1f}")
+
+        # RF é muito melhor que LSTM quando há poucas amostras por classe
+        if amostras_por_classe < self._MIN_AMOSTRAS_LSTM:
+            return self._treinar_dinamico_rf(Xv, yv, metav, pesos, prioridades, enc, n_classes, log)
+
+        # --- LSTM path (muitas amostras) ---
+        y_enc = enc.transform(yv)
+
         test_size_abs = max(int(qtd_amostras * 0.2), qtd_classes)
 
         if test_size_abs >= qtd_amostras:
@@ -1029,8 +1142,6 @@ class GerenciadorModelos:
             )
 
         if log:
-            log(f"📊 Classes dinâmicas após filtro: {qtd_classes}")
-            log(f"📊 Amostras dinâmicas após filtro: {qtd_amostras}")
             log(f"📊 Tamanho do teste ajustado: {test_size_abs}")
 
         Xtr, Xte, ytr_s, yte_s, wtr, _, _, _ = train_test_split(
@@ -1044,9 +1155,8 @@ class GerenciadorModelos:
         self.norm_media_din = media
         self.norm_std_din = std
 
-        # Augmentation agressivo: quanto menos amostras por classe, mais aumentamos
-        amostras_por_classe = len(Xtr) / max(n_classes, 1)
-        fator_aug = 5 if amostras_por_classe < 5 else (3 if amostras_por_classe < 10 else 1)
+        # Augmentation agressivo baseado nas amostras de treino
+        fator_aug = 3 if (len(Xtr) / max(n_classes, 1)) < 20 else 1
 
         Xtr_aug, ytr_aug, wtr_aug = self._aumentar_dataset_dinamico(Xtr, ytr_s, wtr, fator=fator_aug)
 
@@ -1168,6 +1278,10 @@ class GerenciadorModelos:
 
 
     def prever_dinamico(self, sequencia):
+        # RF tem prioridade quando disponível (funciona melhor com poucos dados)
+        if self.modelo_dinamico_rf is not None:
+            return self.prever_dinamico_rf(sequencia)
+
         if self.modelo_dinamico is None or self.encoder_dinamico is None:
             return None, 0.0
 
@@ -1187,6 +1301,9 @@ class GerenciadorModelos:
             return None, 0.0
 
     def _carregar_dinamico(self):
+        # Carrega RF primeiro (não precisa de TF)
+        self._carregar_dinamico_rf()
+
         ok_tf, _ = verificar_tensorflow()
         if not ok_tf:
             return
