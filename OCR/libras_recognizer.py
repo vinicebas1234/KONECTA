@@ -1930,6 +1930,10 @@ class LibrasApp(tk.Tk):
         self._set_pred_label(pred, conf)
         self.txt.insert(tk.END, pred + " ")
         self.txt.see(tk.END)
+        self.lbl_info.configure(
+            text=f"✅ Último gesto: {pred} ({conf:.0%})",
+            foreground=COR_GREEN
+        )
         self.hold_pred = ""
         self.hold_start = 0.0
         self._debug(f"Gesto dinâmico confirmado: {pred} ({conf:.2%})")
@@ -2096,15 +2100,13 @@ class LibrasApp(tk.Tk):
                             if len(self.seq_rec) >= MIN_DYNAMIC_FRAMES:
                                 seq = np.array(self.seq_rec[-SEQUENCE_LENGTH:], dtype=np.float32)
                                 p, c = self.modelos.prever_dinamico(seq)
-                                # Sempre loga o resultado para facilitar diagnóstico
-                                self.after(0, self._log, f"🔍 Gesto detectado: '{p}' (confiança {c:.1%}) | {len(self.seq_rec)} frames")
-                                # Para gestos dinâmicos disparados por saída da mão,
-                                # usa limiar menor (0.15) pois o RF com muitas classes raramente passa de 0.5
                                 lim_din = max(0.15, lim * 0.4)
                                 if p and c >= lim_din:
                                     self.after(0, lambda p=p, c=c: self._confirmar_pred_direta(p, c))
                                 else:
                                     self.after(0, lambda p=p, c=c: self._set_pred_label(f"{p}?", c))
+                                if self.var_debug.get():
+                                    self.after(0, self._log, f"[DEBUG] Gesto: '{p}' ({c:.1%}) | {len(self.seq_rec)} frames")
                             self.seq_rec = []
 
                         self.hand_was_visible = False
