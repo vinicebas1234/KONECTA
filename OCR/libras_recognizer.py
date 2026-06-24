@@ -45,6 +45,7 @@ from tkinter import ttk, messagebox, scrolledtext
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.model_selection import train_test_split
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import LabelEncoder
 
 from mediapipe.tasks import python
@@ -556,14 +557,22 @@ class GerenciadorDados:
 class GerenciadorModelos:
     """Treino, inferência e persistência dos modelos estático/dinâmico."""
 
+    # Limiar: abaixo disso usa RF em vez de rede neural
+    _MIN_AMOSTRAS_LSTM = 10
+
     def __init__(self):
         self.modelo_estatico = None
         self.encoder_estatico = None
 
+        # Modelo dinâmico por rede neural (LSTM/GRU) — para muitas amostras
         self.modelo_dinamico = None
         self.encoder_dinamico = None
         self.norm_media_din = None
         self.norm_std_din = None
+
+        # Modelo dinâmico por RandomForest — para poucas amostras (≥ 3 basta)
+        self.modelo_dinamico_rf = None
+        self.encoder_dinamico_rf = None
 
         self._carregar_estatico()
         self._carregar_dinamico()
@@ -868,6 +877,103 @@ class GerenciadorModelos:
 
 
     # ──────────────────────────────────────────────────────────────────────────
+    # DINÂMICO — features temporais (usadas pelo RF e pelo KNN)
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _extrair_features_seq(seq):
+        """Converte sequência (N×126) em vetor fixo de features temporais.
+
+        Divide em 3 segmentos temporais, calcula média de cada um e
+        a velocidade média (diferença entre frames consecutivos).
+        Resultado: 126×4 = 504 features.
+        """
+        seq = GerenciadorModelos._pad_or_crop_sequence(
+            np.asarray(seq, dtype=np.float32), SEQUENCE_LENGTH
+        )
+        n3 = SEQUENCE_LENGTH // 3
+        seg1 = seq[:n3].mean(axis=0)           # início do gesto
+        seg2 = seq[n3: 2 * n3].mean(axis=0)   # meio
+        seg3 = seq[2 * n3:].mean(axis=0)       # fim
+        vel = np.diff(seq, axis=0).mean(axis=0)  # velocidade média entre frames
+        return np.concatenate([seg1, seg2, seg3, vel]).astype(np.float32)
+
+    def _treinar_dinamico_rf(self, Xv, yv, metav, pesos, prioridades, enc, n_classes, log):
+        """KNN k=1 para sinais dinâmicos com poucas amostras.
+
+        Com 3 amostras/classe, classificadores tradicionais não generalizam.
+        KNN k=1 usa similaridade de cosseno para encontrar o template mais
+        parecido — funciona bem mesmo com 1-3 exemplos por classe.
+        Treina em TODAS as amostras (sem split) para maximizar cobertura.
+        """
+        if log:
+            log("🔍 Modo KNN ativado (poucas amostras/classe — busca pelo template mais similar).")
+            log(f"📦 Armazenando {len(Xv)} templates de {n_classes} sinais...")
+
+        X_feat = np.array([self._extrair_features_seq(s) for s in Xv], dtype=np.float32)
+        y_enc = enc.transform(yv)
+
+        # k=1: retorna o sinal mais parecido. Cosine é robusto para features de alta dimensão.
+        mdl = KNeighborsClassifier(n_neighbors=1, metric="cosine", algorithm="brute", n_jobs=-1)
+        mdl.fit(X_feat, y_enc)
+
+        # Avaliação leave-one-out rápida (só possível com todos os dados)
+        corretos = 0
+        for i in range(len(X_feat)):
+            # Ignora o próprio exemplo (simula LOO)
+            dists, idxs = mdl.kneighbors(X_feat[i:i+1], n_neighbors=min(4, len(X_feat)))
+            vizinhos = [(d, y_enc[j]) for d, j in zip(dists[0], idxs[0]) if j != i]
+            if vizinhos and vizinhos[0][1] == y_enc[i]:
+                corretos += 1
+        acc_loo = corretos / len(X_feat) if X_feat.size else 0.0
+
+        self.modelo_dinamico_rf = mdl
+        self.encoder_dinamico_rf = enc
+
+        with open(DIR_MODELOS / "modelo_dinamico_rf.pkl", "wb") as f:
+            pickle.dump(mdl, f)
+        with open(DIR_MODELOS / "encoder_dinamico_rf.pkl", "wb") as f:
+            pickle.dump(enc, f)
+
+        return (
+            "✅ MODELO DINÂMICO (KNN) TREINADO\n"
+            f"Acurácia LOO: {acc_loo:.2%} | Classes: {n_classes} | Templates: {len(Xv)}\n"
+            f"Prioridades locais: {', '.join(sorted(prioridades)) if prioridades else '(nenhuma)'}\n"
+            "─" * 50 + "\n"
+            "Pronto para reconhecer. Faça o sinal e retire a mão da câmera.\n"
+        )
+
+    def prever_dinamico_rf(self, sequencia):
+        """Predição via KNN k=1 (similaridade de cosseno com templates armazenados)."""
+        if self.modelo_dinamico_rf is None or self.encoder_dinamico_rf is None:
+            return None, 0.0
+        try:
+            feat = self._extrair_features_seq(sequencia).reshape(1, -1)
+            dist, idx = self.modelo_dinamico_rf.kneighbors(feat, n_neighbors=1)
+            distancia = float(dist[0][0])   # distância cosseno: 0 = idêntico, 2 = oposto
+            y_pred = int(self.modelo_dinamico_rf._y[idx[0][0]])
+            rotulo = self.encoder_dinamico_rf.classes_[y_pred]
+            # Converte distância em confiança: dist=0 → conf=1.0, dist=1 → conf=0.0
+            confianca = max(0.0, 1.0 - distancia)
+            return rotulo, confianca
+        except Exception:
+            return None, 0.0
+
+    def _carregar_dinamico_rf(self):
+        m = DIR_MODELOS / "modelo_dinamico_rf.pkl"
+        e = DIR_MODELOS / "encoder_dinamico_rf.pkl"
+        if m.exists() and e.exists():
+            try:
+                with open(m, "rb") as f:
+                    self.modelo_dinamico_rf = pickle.load(f)
+                with open(e, "rb") as f:
+                    self.encoder_dinamico_rf = pickle.load(f)
+            except Exception as exc:
+                print(f"Erro ao carregar modelo dinâmico RF: {exc}")
+                self.modelo_dinamico_rf = None
+                self.encoder_dinamico_rf = None
+
+    # ──────────────────────────────────────────────────────────────────────────
     # DINÂMICO (LSTM)
     # ──────────────────────────────────────────────────────────────────────────
     def _criar_modelo_dinamico(self, n_classes, n_amostras=0):
@@ -1011,11 +1117,24 @@ class GerenciadorModelos:
             return "❌ Após o filtro, restaram menos de 2 classes dinâmicas para treino."
 
         enc = LabelEncoder()
-        y_enc = enc.fit_transform(yv)
+        enc.fit(yv)
         n_classes = len(enc.classes_)
-
         qtd_amostras = len(Xv)
         qtd_classes = n_classes
+
+        amostras_por_classe = qtd_amostras / max(qtd_classes, 1)
+
+        if log:
+            log(f"📊 Classes dinâmicas: {qtd_classes} | Amostras: {qtd_amostras}")
+            log(f"📊 Média amostras/classe: {amostras_por_classe:.1f}")
+
+        # RF é muito melhor que LSTM quando há poucas amostras por classe
+        if amostras_por_classe < self._MIN_AMOSTRAS_LSTM:
+            return self._treinar_dinamico_rf(Xv, yv, metav, pesos, prioridades, enc, n_classes, log)
+
+        # --- LSTM path (muitas amostras) ---
+        y_enc = enc.transform(yv)
+
         test_size_abs = max(int(qtd_amostras * 0.2), qtd_classes)
 
         if test_size_abs >= qtd_amostras:
@@ -1029,8 +1148,6 @@ class GerenciadorModelos:
             )
 
         if log:
-            log(f"📊 Classes dinâmicas após filtro: {qtd_classes}")
-            log(f"📊 Amostras dinâmicas após filtro: {qtd_amostras}")
             log(f"📊 Tamanho do teste ajustado: {test_size_abs}")
 
         Xtr, Xte, ytr_s, yte_s, wtr, _, _, _ = train_test_split(
@@ -1044,9 +1161,8 @@ class GerenciadorModelos:
         self.norm_media_din = media
         self.norm_std_din = std
 
-        # Augmentation agressivo: quanto menos amostras por classe, mais aumentamos
-        amostras_por_classe = len(Xtr) / max(n_classes, 1)
-        fator_aug = 5 if amostras_por_classe < 5 else (3 if amostras_por_classe < 10 else 1)
+        # Augmentation agressivo baseado nas amostras de treino
+        fator_aug = 3 if (len(Xtr) / max(n_classes, 1)) < 20 else 1
 
         Xtr_aug, ytr_aug, wtr_aug = self._aumentar_dataset_dinamico(Xtr, ytr_s, wtr, fator=fator_aug)
 
@@ -1168,6 +1284,10 @@ class GerenciadorModelos:
 
 
     def prever_dinamico(self, sequencia):
+        # RF tem prioridade quando disponível (funciona melhor com poucos dados)
+        if self.modelo_dinamico_rf is not None:
+            return self.prever_dinamico_rf(sequencia)
+
         if self.modelo_dinamico is None or self.encoder_dinamico is None:
             return None, 0.0
 
@@ -1187,6 +1307,9 @@ class GerenciadorModelos:
             return None, 0.0
 
     def _carregar_dinamico(self):
+        # Carrega RF primeiro (não precisa de TF)
+        self._carregar_dinamico_rf()
+
         ok_tf, _ = verificar_tensorflow()
         if not ok_tf:
             return
@@ -1248,6 +1371,7 @@ class LibrasApp(tk.Tk):
         self.hold_pred = ""
         self.hold_start = 0.0
         self.seq_rec = []
+        self.hand_was_visible = False  # controla disparo de predição dinâmica
 
         # Debug/diagnóstico
         self.last_log_rec = 0.0
@@ -1774,7 +1898,11 @@ class LibrasApp(tk.Tk):
         if modo in ("estatico", "ambos") and self.modelos.modelo_estatico is None:
             messagebox.showwarning("Aviso", "Treine o modelo estático primeiro.")
             return
-        if modo in ("dinamico", "ambos") and self.modelos.modelo_dinamico is None:
+        tem_modelo_din = (
+            self.modelos.modelo_dinamico_rf is not None or
+            self.modelos.modelo_dinamico is not None
+        )
+        if modo in ("dinamico", "ambos") and not tem_modelo_din:
             messagebox.showwarning("Aviso", "Treine o modelo dinâmico primeiro.")
             return
 
@@ -1782,6 +1910,7 @@ class LibrasApp(tk.Tk):
         self.hold_pred = ""
         self.hold_start = 0.0
         self.seq_rec = []
+        self.hand_was_visible = False
 
         self.btn_start_rec.configure(state=tk.DISABLED)
         self.btn_stop_rec.configure(state=tk.NORMAL)
@@ -1795,6 +1924,19 @@ class LibrasApp(tk.Tk):
         self.lbl_info.configure(text="⏹ Reconhecimento parado.", foreground=COR_YELLOW)
         self.lbl_pred.configure(text="—")
         self._log("⏹ Reconhecimento pausado")
+
+    def _confirmar_pred_direta(self, pred, conf):
+        """Confirmação imediata para gestos dinâmicos (disparada ao fim do gesto)."""
+        self._set_pred_label(pred, conf)
+        self.txt.insert(tk.END, pred + " ")
+        self.txt.see(tk.END)
+        self.lbl_info.configure(
+            text=f"✅ Último gesto: {pred} ({conf:.0%})",
+            foreground=COR_GREEN
+        )
+        self.hold_pred = ""
+        self.hold_start = 0.0
+        self._debug(f"Gesto dinâmico confirmado: {pred} ({conf:.2%})")
 
     def _confirmar_pred(self, pred, conf):
         self._set_pred_label(pred, conf)
@@ -1930,6 +2072,11 @@ class LibrasApp(tk.Tk):
                     pred, conf = None, 0.0
 
                     if tem_mao:
+                        # Mão apareceu agora: zera o buffer para começar gesto limpo
+                        if not self.hand_was_visible:
+                            self.seq_rec = []
+                        self.hand_was_visible = True
+
                         if modo in ("estatico", "ambos"):
                             p, c = self.modelos.prever_estatico(feats)
                             if p and c >= lim:
@@ -1937,14 +2084,6 @@ class LibrasApp(tk.Tk):
 
                         if modo in ("dinamico", "ambos"):
                             self.seq_rec.append(feats)
-                            # Manter no máximo 2× SEQUENCE_LENGTH para evitar crescimento infinito
-                            if len(self.seq_rec) > SEQUENCE_LENGTH * 2:
-                                self.seq_rec = self.seq_rec[-SEQUENCE_LENGTH:]
-                            if len(self.seq_rec) >= SEQUENCE_LENGTH:
-                                seq = np.array(self.seq_rec[-SEQUENCE_LENGTH:], dtype=np.float32)
-                                p, c = self.modelos.prever_dinamico(seq)
-                                if p and c >= lim and c > conf:
-                                    pred, conf = p, c
 
                         if pred:
                             self.after(0, lambda p=pred, c=conf: self._confirmar_pred(p, c))
@@ -1953,10 +2092,30 @@ class LibrasApp(tk.Tk):
 
                         if self.var_debug.get() and (time.time() - self.last_log_rec) > 2.0:
                             self.last_log_rec = time.time()
-                            self.after(0, self._log, f"[DEBUG] Reconhecimento ativo | modo={modo} | seq_len={len(self.seq_rec)}")
+                            self.after(0, self._log, f"[DEBUG] Reconhecendo | modo={modo} | frames={len(self.seq_rec)}")
+
                     else:
-                        self.seq_rec = []
-                        self.after(0, lambda: self._set_pred_label("—", 0.0))
+                        # Mão saiu: se estava visível e temos frames suficientes → predizer agora
+                        fez_predicao = False
+                        if self.hand_was_visible and modo in ("dinamico", "ambos"):
+                            if len(self.seq_rec) >= MIN_DYNAMIC_FRAMES:
+                                seq = np.array(self.seq_rec[-SEQUENCE_LENGTH:], dtype=np.float32)
+                                p, c = self.modelos.prever_dinamico(seq)
+                                lim_din = max(0.15, lim * 0.4)
+                                if p and c >= lim_din:
+                                    self.after(0, lambda p=p, c=c: self._confirmar_pred_direta(p, c))
+                                    fez_predicao = True
+                                else:
+                                    self.after(0, lambda p=p, c=c: self._set_pred_label(f"{p}?", c))
+                                    fez_predicao = True
+                                if self.var_debug.get():
+                                    self.after(0, self._log, f"[DEBUG] Gesto: '{p}' ({c:.1%}) | {len(self.seq_rec)} frames")
+                            self.seq_rec = []
+
+                        self.hand_was_visible = False
+                        # Só limpa o label se não fez predição (para manter o resultado visível)
+                        if not fez_predicao:
+                            self.after(0, lambda: self._set_pred_label("—", 0.0))
 
                 if self.coletando:
                     color = (0, 255, 0) if tem_mao else (0, 0, 255)
