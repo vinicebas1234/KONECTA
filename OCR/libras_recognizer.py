@@ -1828,6 +1828,7 @@ class LibrasApp(tk.Tk):
         self._aba_coleta()
         self._aba_treino()
         self._aba_rec()
+        self._aba_transcricao()
 
         # Inferior: texto
         bottom = ttk.LabelFrame(self, text="📝 Texto Traduzido", padding=10)
@@ -2011,6 +2012,66 @@ class LibrasApp(tk.Tk):
 
         self.lbl_info = ttk.Label(aba, text="ℹ Treine os modelos antes de reconhecer.", foreground=COR_YELLOW)
         self.lbl_info.pack(pady=10)
+
+    def _aba_transcricao(self):
+        aba = ttk.Frame(self.nb, padding=15)
+        self.nb.add(aba, text="✍️ Transcrição")
+
+        # Modo de transcrição
+        mode = ttk.LabelFrame(aba, text="Configuração", padding=10)
+        mode.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(mode, text="Modo de tradução:").pack(anchor=tk.W)
+        self.var_modo_trans = tk.StringVar(value="dinamico")
+        ttk.Radiobutton(mode, text="👋 Dinâmico (gestos)", variable=self.var_modo_trans, value="dinamico").pack(anchor=tk.W)
+        ttk.Radiobutton(mode, text="🖐 Estático (letras)", variable=self.var_modo_trans, value="estatico").pack(anchor=tk.W)
+        ttk.Radiobutton(mode, text="🤟 Ambos", variable=self.var_modo_trans, value="ambos").pack(anchor=tk.W)
+
+        # Controles
+        btn_frame = ttk.Frame(aba)
+        btn_frame.pack(fill=tk.X, pady=10)
+        self.btn_trans_start = ttk.Button(btn_frame, text="🎥 Iniciar Transcrição", style="Accent.TButton", command=self._iniciar_transcricao)
+        self.btn_trans_start.pack(side=tk.LEFT, padx=5)
+        self.btn_trans_stop = ttk.Button(btn_frame, text="⏹ Parar", style="Danger.TButton", command=self._parar_transcricao, state=tk.DISABLED)
+        self.btn_trans_stop.pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(btn_frame, text="💾 Salvar", command=self._salvar_transcricao).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="🗑 Limpar", style="Danger.TButton", command=self._limpar_transcricao).pack(side=tk.LEFT, padx=5)
+
+        # Texto traduzido
+        txt_frame = ttk.LabelFrame(aba, text="Transcrição em Tempo Real", padding=10)
+        txt_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        self.txt_trans = scrolledtext.ScrolledText(
+            txt_frame,
+            height=8,
+            bg=COR_BG2,
+            fg=COR_GREEN,
+            font=("Consolas", 12),
+            insertbackground=COR_FG,
+            wrap=tk.WORD,
+            state=tk.DISABLED
+        )
+        self.txt_trans.pack(fill=tk.BOTH, expand=True)
+
+        # Histórico com timestamps
+        hist_frame = ttk.LabelFrame(aba, text="Histórico (últimos 10 gestos)", padding=10)
+        hist_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.txt_historico = scrolledtext.ScrolledText(
+            hist_frame,
+            height=5,
+            bg=COR_BG2,
+            fg=COR_PEACH,
+            font=("Consolas", 9),
+            state=tk.DISABLED
+        )
+        self.txt_historico.pack(fill=tk.BOTH, expand=True)
+
+        # Estado de transcrição
+        self.transcrição_ativa = False
+        self.transcrição_buffer = []
+        self.transcrição_timestamps = []
 
     # ──────────────────────────────────────────────────────────────────────────
     # UTIL
@@ -2341,6 +2402,105 @@ class LibrasApp(tk.Tk):
         self.lbl_pred.configure(text="—")
         self._log("⏹ Reconhecimento pausado")
 
+    def _iniciar_transcricao(self):
+        """Inicia modo transcrição (reconhecimento + texto em tempo real)."""
+        modo = self.var_modo_trans.get()
+        if modo in ("dinamico", "ambos") and self.modelos.modelo_dinamico_rf is None and self.modelos.X_train_dtw is None:
+            messagebox.showwarning("Aviso", "Treine o modelo dinâmico primeiro.")
+            return
+        if modo in ("estatico", "ambos") and self.modelos.modelo_estatico is None:
+            messagebox.showwarning("Aviso", "Treine o modelo estático primeiro.")
+            return
+
+        self.transcrição_ativa = True
+        self.transcrição_buffer = []
+        self.transcrição_timestamps = []
+
+        self.btn_trans_start.configure(state=tk.DISABLED)
+        self.btn_trans_stop.configure(state=tk.NORMAL)
+        self.txt_trans.configure(state=tk.NORMAL)
+        self.txt_trans.delete("1.0", tk.END)
+        self.txt_trans.configure(state=tk.DISABLED)
+
+        self._iniciar_rec()
+        self._log(f"✍️ Transcrição iniciada | modo={modo}")
+
+    def _parar_transcricao(self):
+        """Para transcrição e mostra resultado final."""
+        self.transcrição_ativa = False
+        self._parar_rec()
+
+        self.btn_trans_start.configure(state=tk.NORMAL)
+        self.btn_trans_stop.configure(state=tk.DISABLED)
+
+        self._log(f"✍️ Transcrição parada | {len(self.transcrição_buffer)} gestos capturados")
+
+    def _atualizar_transcricao(self, sinal, confianca):
+        """Atualiza texto de transcrição quando um sinal é reconhecido."""
+        if not self.transcrição_ativa:
+            return
+
+        self.transcrição_buffer.append(sinal)
+        self.transcrição_timestamps.append(datetime.now())
+
+        # Atualizar texto principal
+        self.txt_trans.configure(state=tk.NORMAL)
+        texto_atual = self.txt_trans.get("1.0", tk.END).strip()
+        novo_texto = (texto_atual + " " + sinal).strip()
+        self.txt_trans.delete("1.0", tk.END)
+        self.txt_trans.insert("1.0", novo_texto)
+        self.txt_trans.see(tk.END)
+        self.txt_trans.configure(state=tk.DISABLED)
+
+        # Atualizar histórico (últimos 10)
+        histórico = self.transcrição_buffer[-10:]
+        self.txt_historico.configure(state=tk.NORMAL)
+        self.txt_historico.delete("1.0", tk.END)
+        for i, (sig, ts) in enumerate(zip(histórico, self.transcrição_timestamps[-10:])):
+            timestamp_str = ts.strftime("%H:%M:%S")
+            self.txt_historico.insert(tk.END, f"{i+1}. [{timestamp_str}] {sig}\n")
+        self.txt_historico.configure(state=tk.DISABLED)
+
+    def _salvar_transcricao(self):
+        """Salva transcrição como arquivo de texto."""
+        if not self.transcrição_buffer:
+            messagebox.showwarning("Aviso", "Nenhuma transcrição para salvar.")
+            return
+
+        conteudo = " ".join(self.transcrição_buffer)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        arquivo = f"transcricao_{timestamp}.txt"
+
+        try:
+            with open(arquivo, "w", encoding="utf-8") as f:
+                f.write(f"Transcrição LIBRAS → Português\n")
+                f.write(f"Data/Hora: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Gestos reconhecidos: {len(self.transcrição_buffer)}\n")
+                f.write("─" * 50 + "\n\n")
+                f.write(conteudo + "\n\n")
+                f.write("─" * 50 + "\n")
+                f.write("Histórico detalhado:\n")
+                for i, (sig, ts) in enumerate(zip(self.transcrição_buffer, self.transcrição_timestamps)):
+                    f.write(f"{i+1}. [{ts.strftime('%H:%M:%S')}] {sig}\n")
+
+            messagebox.showinfo("Sucesso", f"Transcrição salva em:\n{arquivo}")
+            self._log(f"💾 Transcrição salva: {arquivo}")
+        except Exception as e:
+            messagebox.showerror("Erro", f"Falha ao salvar: {e}")
+
+    def _limpar_transcricao(self):
+        """Limpa buffer de transcrição."""
+        if messagebox.askyesno("Confirmar", "Limpar transcrição?"):
+            self.transcrição_buffer = []
+            self.transcrição_timestamps = []
+            self.txt_trans.configure(state=tk.NORMAL)
+            self.txt_trans.delete("1.0", tk.END)
+            self.txt_trans.configure(state=tk.DISABLED)
+            self.txt_historico.configure(state=tk.NORMAL)
+            self.txt_historico.delete("1.0", tk.END)
+            self.txt_historico.configure(state=tk.DISABLED)
+            self._log("🗑 Transcrição limpa")
+
     def _confirmar_pred_direta(self, pred, conf):
         """Confirmação imediata para gestos dinâmicos (disparada ao fim do gesto)."""
         self.ultimo_pred = pred
@@ -2348,6 +2508,11 @@ class LibrasApp(tk.Tk):
         self._set_pred_label(pred, conf)
         self.txt.insert(tk.END, pred + " ")
         self.txt.see(tk.END)
+
+        # Atualizar transcrição se ativa
+        if self.transcrição_ativa:
+            self._atualizar_transcricao(pred, conf)
+
         self.lbl_info.configure(
             text=f"✅ Último gesto: {pred} ({conf:.0%})",
             foreground=COR_GREEN
@@ -2368,6 +2533,11 @@ class LibrasApp(tk.Tk):
                 self.ultima_conf = conf
                 self.txt.insert(tk.END, pred + " ")
                 self.txt.see(tk.END)
+
+                # Atualizar transcrição se ativa
+                if self.transcrição_ativa:
+                    self._atualizar_transcricao(pred, conf)
+
                 self.hold_pred = ""
                 self.hold_start = 0.0
                 self.seq_rec.clear()
