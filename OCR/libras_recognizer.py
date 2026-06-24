@@ -2096,6 +2096,7 @@ class LibrasApp(tk.Tk):
 
                     else:
                         # Mão saiu: se estava visível e temos frames suficientes → predizer agora
+                        fez_predicao = False
                         if self.hand_was_visible and modo in ("dinamico", "ambos"):
                             if len(self.seq_rec) >= MIN_DYNAMIC_FRAMES:
                                 seq = np.array(self.seq_rec[-SEQUENCE_LENGTH:], dtype=np.float32)
@@ -2103,14 +2104,18 @@ class LibrasApp(tk.Tk):
                                 lim_din = max(0.15, lim * 0.4)
                                 if p and c >= lim_din:
                                     self.after(0, lambda p=p, c=c: self._confirmar_pred_direta(p, c))
+                                    fez_predicao = True
                                 else:
                                     self.after(0, lambda p=p, c=c: self._set_pred_label(f"{p}?", c))
+                                    fez_predicao = True
                                 if self.var_debug.get():
                                     self.after(0, self._log, f"[DEBUG] Gesto: '{p}' ({c:.1%}) | {len(self.seq_rec)} frames")
                             self.seq_rec = []
 
                         self.hand_was_visible = False
-                        self.after(0, lambda: self._set_pred_label("—", 0.0))
+                        # Só limpa o label se não fez predição (para manter o resultado visível)
+                        if not fez_predicao:
+                            self.after(0, lambda: self._set_pred_label("—", 0.0))
 
                 if self.coletando:
                     color = (0, 255, 0) if tem_mao else (0, 0, 255)
