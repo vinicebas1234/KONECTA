@@ -697,6 +697,82 @@ class GerenciadorModelos:
         return out.astype(np.float32)
 
     @staticmethod
+    def _validar_amostra_dinamica(seq):
+        """Valida qualidade da amostra durante coleta.
+
+        Retorna: (válida: bool, motivo: str, qualidade: float 0-1)
+        """
+        seq = np.asarray(seq, dtype=np.float32)
+        n_frames = len(seq)
+
+        # Critério 1: Mínimo de frames
+        if n_frames < MIN_DYNAMIC_FRAMES:
+            score = n_frames / MIN_DYNAMIC_FRAMES
+            return False, f"movimento insuficiente ({n_frames}/<{MIN_DYNAMIC_FRAMES} frames)", score
+
+        # Critério 2: Movimento significativo (variance média)
+        movimento = np.std(seq, axis=0).mean()
+        if movimento < 0.008:
+            score = movimento / 0.015
+            return False, f"muito estático (variância {movimento:.4f})", score
+
+        # Critério 3: Detecção de "glitches" (picos anormais)
+        try:
+            diffs = np.linalg.norm(np.diff(seq, axis=0), axis=1)
+            media_diff = np.mean(diffs)
+            std_diff = np.std(diffs)
+            outliers = np.sum(diffs > media_diff + 3*std_diff)
+
+            if outliers > n_frames * 0.2:
+                score = 1.0 - (outliers / n_frames)
+                return False, f"movimento irregular ({outliers} picos anormais)", score
+        except:
+            pass
+
+        # Qualidade final (0-1, baseado em tamanho e movimento)
+        qualidade = min(1.0, (n_frames / SEQUENCE_LENGTH) * (movimento / 0.05))
+        qualidade = np.clip(qualidade, 0.5, 1.0)  # mínimo 50%
+
+        return True, "✅ OK", qualidade
+
+    @staticmethod
+    def _calcular_diversidade(lista_sequencias):
+        """Calcula similaridade média entre últimas N sequências.
+
+        Retorna: (diversidade: float 0-1, alerta: str ou None)
+        """
+        if len(lista_sequencias) < 2:
+            return 1.0, None
+
+        # Usar últimas 5 ou quantas tiver
+        ultimas = lista_sequencias[-5:]
+
+        # Calcular similaridade coseno pairwise
+        similaridades = []
+        for i in range(len(ultimas) - 1):
+            v1 = ultimas[i].flatten()
+            v2 = ultimas[i+1].flatten()
+
+            # Normalizar
+            v1 = v1 / (np.linalg.norm(v1) + 1e-6)
+            v2 = v2 / (np.linalg.norm(v2) + 1e-6)
+
+            # Coseno (0 = diferentes, 1 = idênticos)
+            sim = np.dot(v1, v2)
+            similaridades.append(sim)
+
+        sim_media = np.mean(similaridades)
+        diversidade = 1.0 - sim_media  # 0 = idêntico, 1 = diferente
+
+        alerta = None
+        if diversidade < 0.08:
+            alerta = "⚠️  Últimas amostras MUITO similares — mude velocidade/posição"
+        elif diversidade < 0.15:
+            alerta = "⚠️  Últimas amostras similares — considere variar mais"
+
+        return diversidade, alerta
+
+    @staticmethod
     def _aumentar_dataset_dinamico(X, y, w, fator=1):
         if fator <= 0:
             return X, y, w
@@ -1340,6 +1416,15 @@ class LibrasApp(tk.Tk):
         self.seg_frames_sem_mao = 0      # contador de frames sem mão após gravação
         self.SEG_FRAMES_PAUSA = 8        # frames sem mão para confirmar fim do sinal
 
+        # Validação e diversidade
+        self.buffer_ultimas_amostras = []  # últimas 5 amostras para verificar diversidade
+        self.estatisticas_coleta = {      # tracker de qualidade durante coleta
+            "total_validas": 0,
+            "total_rejeitadas": 0,
+            "qualidades": [],
+            "diversidades": []
+        }
+
         # Reconhecimento
         self.hold_pred = ""
         self.hold_start = 0.0
@@ -1614,6 +1699,22 @@ class LibrasApp(tk.Tk):
         if self.var_debug.get():
             self._log(f"[DEBUG] {s}")
 
+    def _log_validacao(self, motivo, qualidade, diversidade, alerta_diversidade):
+        """Log formatado de validação com estatísticas."""
+        n = self.amostras_coletadas
+        q_media = np.mean(self.estatisticas_coleta["qualidades"][-10:]) if self.estatisticas_coleta["qualidades"] else 0
+        d_media = np.mean(self.estatisticas_coleta["diversidades"][-5:]) if self.estatisticas_coleta["diversidades"] else 0
+
+        msg = f"#{n} {motivo} | qualidade={qualidade:.0%}"
+        if q_media > 0:
+            msg += f" (média={q_media:.0%})"
+        msg += f" | diversidade={diversidade:.3f}"
+
+        self._log(msg)
+
+        if alerta_diversidade:
+            self._log(alerta_diversidade)
+
     def _tecla_espaco(self, event=None):
         """Avança para o próximo sinal na coleta dinâmica com segmentação."""
         if self.coletando and self.tipo_coleta == "dinamico":
@@ -1707,6 +1808,15 @@ class LibrasApp(tk.Tk):
         # Reseta estado de segmentação automática
         self.seg_estado = "aguardando_espaco"
         self.seg_frames_sem_mao = 0
+
+        # Reseta buffer e estatísticas
+        self.buffer_ultimas_amostras = []
+        self.estatisticas_coleta = {
+            "total_validas": 0,
+            "total_rejeitadas": 0,
+            "qualidades": [],
+            "diversidades": []
+        }
 
         self.coletando = True
 
@@ -2039,14 +2149,44 @@ class LibrasApp(tk.Tk):
                             else:
                                 self.seg_frames_sem_mao += 1
                                 if self.seg_frames_sem_mao >= self.SEG_FRAMES_PAUSA:
-                                    # Sinal terminou: salva e aguarda próximo ESPAÇO
+                                    # Sinal terminou: VALIDA antes de salvar
                                     seq = np.array(self.seq_buffer, dtype=np.float32)
-                                    if seq.shape[0] >= MIN_DYNAMIC_FRAMES:
+
+                                    # VALIDAÇÃO DE QUALIDADE
+                                    valida, motivo, qualidade = self.modelos._validar_amostra_dinamica(seq)
+
+                                    if valida:
+                                        # CALCULA DIVERSIDADE
+                                        self.buffer_ultimas_amostras.append(seq.copy())
+                                        if len(self.buffer_ultimas_amostras) > 5:
+                                            self.buffer_ultimas_amostras.pop(0)
+
+                                        diversidade, alerta_div = self.modelos._calcular_diversidade(
+                                            self.buffer_ultimas_amostras
+                                        )
+
+                                        # SALVA
                                         self.dados.salvar_dinamico(self.rotulo_coleta, seq)
                                         self.amostras_coletadas += 1
+
+                                        # STATS
+                                        self.estatisticas_coleta["total_validas"] += 1
+                                        self.estatisticas_coleta["qualidades"].append(qualidade)
+                                        self.estatisticas_coleta["diversidades"].append(diversidade)
+
+                                        # FEEDBACK
+                                        self.after(0, lambda m=motivo, q=qualidade, d=diversidade, a=alerta_div:
+                                            self._log_validacao(m, q, d, a))
                                         self.after(0, self._atualizar_progresso_overlay)
+
                                         if self.amostras_coletadas >= self.amostras_alvo:
                                             self.after(0, self._finalizar_coleta)
+                                    else:
+                                        # REJEITADA
+                                        self.estatisticas_coleta["total_rejeitadas"] += 1
+                                        self.after(0, lambda m=motivo, q=qualidade:
+                                            self._log(f"❌ Amostra rejeitada: {m} ({q:.0%})"))
+
                                     self.seq_buffer = []
                                     self.seg_estado = "aguardando_espaco"
                                     self.seg_frames_sem_mao = 0
