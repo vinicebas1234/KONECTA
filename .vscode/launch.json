@@ -1,0 +1,30 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Libras OCR",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/OCR/libras_recognizer.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "LIBRAS_BASE_DIR": "${workspaceFolder}/OCR",
+                "PYTHONPATH": "${workspaceFolder}/OCR"
+            },
+            "cwd": "${workspaceFolder}/OCR"
+        },
+        {
+            "name": "Python: Importar Dataset",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/OCR/importar_dataset_libras.py",
+            "console": "integratedTerminal",
+            "env": {
+                "LIBRAS_BASE_DIR": "${workspaceFolder}/OCR",
+                "PYTHONPATH": "${workspaceFolder}/OCR"
+            },
+            "cwd": "${workspaceFolder}/OCR"
+        }
+    ]
+}
