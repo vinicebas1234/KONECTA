@@ -8,9 +8,10 @@
 
 Melhorias aplicadas:
 - Detecção robusta de TensorFlow (múltiplas tentativas + instalação automática)
-- Download automático de hand_landmarker.task com progresso e validação
+- MediaPipe Holistic: captura completa de mãos (126) + pose corporal (99) + rosto (1404) = 1629 features
+- Normalização independente por região (mãos → pulso, pose → quadril/ombros, rosto → nariz/bochechas)
 - Arquitetura LSTM dinâmica aprimorada (3 camadas BiLSTM + BatchNorm)
-- Data augmentation para sequências dinâmicas
+- Data augmentation para sequências dinâmicas (espelhamento, rotação, variação temporal)
 - Feedback visual de treino (progresso, métricas por época, ETA e gráfico)
 - Validações, normalização aprimorada, logs detalhados e modo debug
 """
@@ -19,18 +20,14 @@ Melhorias aplicadas:
 # IMPORTAÇÕES
 # ══════════════════════════════════════════════════════════════════════════════
 
-import hashlib
 import importlib
 import os
 import pickle
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import traceback
-import urllib.error
-import urllib.request
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -48,9 +45,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import LabelEncoder
 
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
-from mediapipe.framework.formats import landmark_pb2
 
 try:
     import matplotlib
@@ -76,7 +70,6 @@ for d in (DIR_DADOS, DIR_ESTATICOS, DIR_DINAMICOS, DIR_MODELOS):
     d.mkdir(parents=True, exist_ok=True)
 
 # MediaPipe
-MP_MAX_HANDS = 2
 MP_DET_CONF = 0.7
 MP_TRK_CONF = 0.5
 
@@ -89,18 +82,15 @@ CAM_INDEX = 0
 CAM_WIDTH = 640
 CAM_HEIGHT = 480
 
-# Features
-FEATURES_PER_HAND = 21 * 3  # 63
-TOTAL_FEATURES = FEATURES_PER_HAND * MP_MAX_HANDS  # 126
+# Features — MediaPipe Holistic otimizado para LIBRAS (mãos + pose apenas)
+# Rosto é custoso demais (1404 features) com pouco valor discriminativo para sinais
+FEATURES_MAO      = 21 * 3    # 63 por mão (x,y,z × 21 landmarks)
+FEATURES_MAOS     = FEATURES_MAO * 2  # 126 (mão direita + esquerda)
+FEATURES_POSE     = 33 * 3    # 99  (x,y,z × 33 landmarks de pose)
+TOTAL_FEATURES    = FEATURES_MAOS + FEATURES_POSE  # 225 — otimizado para velocidade e escala
 
-# Hand Landmarker
-HAND_LANDMARKER_URL = (
-    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
-    "hand_landmarker/float16/1/hand_landmarker.task"
-)
-HAND_LANDMARKER_FILE = DIR_MODELOS / "hand_landmarker.task"
-HAND_LANDMARKER_MIN_BYTES = 1_000_000
-DOWNLOAD_CHUNK_SIZE = 256 * 1024
+# Índices de início de cada bloco
+IDX_POSE_START = FEATURES_MAOS  # 126
 
 # Tema (Catppuccin Mocha)
 COR_BG = "#1e1e2e"
@@ -210,208 +200,146 @@ def _safe_log(log_fn, msg):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HAND LANDMARKER: DOWNLOAD + VALIDAÇÃO
+# DETECTOR HOLISTIC (MediaPipe) — mãos + pose + rosto
 # ══════════════════════════════════════════════════════════════════════════════
 
-def validar_hand_landmarker(path_task):
-    """Valida se o arquivo existe, tamanho mínimo e se abre no MediaPipe."""
-    path_task = Path(path_task)
+class DetectorHolistic:
+    """Captura completa via MediaPipe Holistic: mãos (126) + pose (99) + rosto (1404) = 1629 features."""
 
-    if not path_task.exists():
-        return False, "Arquivo não existe"
-
-    tamanho = path_task.stat().st_size
-    if tamanho < HAND_LANDMARKER_MIN_BYTES:
-        return False, f"Arquivo muito pequeno ({tamanho} bytes)"
-
-    try:
-        base_options = python.BaseOptions(model_asset_path=str(path_task))
-        options = vision.HandLandmarkerOptions(base_options=base_options, num_hands=1)
-        tester = vision.HandLandmarker.create_from_options(options)
-        tester.close()
-        return True, f"OK ({tamanho} bytes)"
-    except Exception as exc:
-        return False, f"Falha ao abrir modelo no MediaPipe: {exc}"
-
-
-def baixar_hand_landmarker(path_task, progress_cb=None, log_fn=None):
-    """Baixa o hand_landmarker.task com barra de progresso e hash SHA256."""
-    path_task = Path(path_task)
-    path_task.parent.mkdir(parents=True, exist_ok=True)
-
-    _safe_log(log_fn, "⬇ Iniciando download do hand_landmarker.task...")
-
-    req = urllib.request.Request(HAND_LANDMARKER_URL, headers={"User-Agent": "Mozilla/5.0"})
-    sha = hashlib.sha256()
-
-    tmp_fd, tmp_path = tempfile.mkstemp(prefix="hand_landmarker_", suffix=".part", dir=str(path_task.parent))
-    os.close(tmp_fd)
-
-    baixados = 0
-    total = 0
-    t0 = time.time()
-
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp, open(tmp_path, "wb") as out:
-            content_length = resp.headers.get("Content-Length")
-            total = int(content_length) if content_length and content_length.isdigit() else 0
-
-            while True:
-                chunk = resp.read(DOWNLOAD_CHUNK_SIZE)
-                if not chunk:
-                    break
-                out.write(chunk)
-                sha.update(chunk)
-                baixados += len(chunk)
-
-                if progress_cb:
-                    elapsed = max(time.time() - t0, 1e-6)
-                    velocidade = baixados / elapsed
-                    pct = (baixados / total * 100.0) if total > 0 else 0.0
-                    progress_cb(baixados, total, pct, velocidade)
-
-        os.replace(tmp_path, path_task)
-    except urllib.error.URLError as exc:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise RuntimeError(f"Erro de rede ao baixar hand_landmarker.task: {exc}")
-    except Exception:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
-
-    digest = sha.hexdigest()
-    _safe_log(log_fn, f"🔐 SHA256 do arquivo baixado: {digest}")
-
-    ok, detalhe = validar_hand_landmarker(path_task)
-    if not ok:
-        try:
-            path_task.unlink(missing_ok=True)
-        except Exception:
-            pass
-        raise RuntimeError(f"Arquivo baixado inválido: {detalhe}")
-
-    _safe_log(log_fn, f"✅ hand_landmarker.task pronto ({detalhe})")
-    return {"bytes": baixados, "total": total, "sha256": digest}
-
-
-def garantir_hand_landmarker(path_task, progress_cb=None, log_fn=None):
-    """Garante que o modelo existe; baixa automaticamente se necessário."""
-    ok, detalhe = validar_hand_landmarker(path_task)
-    if ok:
-        _safe_log(log_fn, f"✅ Modelo hand_landmarker já disponível ({detalhe})")
-        return "ok"
-
-    _safe_log(log_fn, f"⚠ Modelo ausente/inválido: {detalhe}")
-    baixar_hand_landmarker(path_task, progress_cb=progress_cb, log_fn=log_fn)
-    return "baixado"
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# DETECTOR DE MÃOS (MediaPipe)
-# ══════════════════════════════════════════════════════════════════════════════
-
-class DetectorMaos:
-    """Detector de mãos e extrator de features (landmarks normalizados)."""
-
-    def __init__(self, model_path=None, debug=False, log_fn=None):
+    def __init__(self, debug=False, log_fn=None):
         self.debug = bool(debug)
         self.log_fn = log_fn
-        self.model_path = str(model_path or HAND_LANDMARKER_FILE)
 
-        if not os.path.exists(self.model_path):
-            raise FileNotFoundError(
-                f"Modelo não encontrado: {self.model_path}. "
-                f"Faça download para {DIR_MODELOS}"
-            )
-
-        base_options = python.BaseOptions(model_asset_path=self.model_path)
-        options = vision.HandLandmarkerOptions(
-            base_options=base_options,
-            num_hands=MP_MAX_HANDS,
-            min_hand_detection_confidence=MP_DET_CONF,
+        self.holistic = mp.solutions.holistic.Holistic(
+            static_image_mode=False,
+            model_complexity=1,        # 0=leve, 1=médio, 2=pesado
+            smooth_landmarks=True,
+            enable_segmentation=False,
+            min_detection_confidence=MP_DET_CONF,
             min_tracking_confidence=MP_TRK_CONF,
         )
 
-        self.detector = vision.HandLandmarker.create_from_options(options)
-
-        self.mp_draw = mp.solutions.drawing_utils
+        self.mp_draw  = mp.solutions.drawing_utils
         self.mp_style = mp.solutions.drawing_styles
-        self.mp_connections = mp.solutions.hands.HAND_CONNECTIONS
+        self.mp_hol   = mp.solutions.holistic
 
     def _debug(self, msg):
         if self.debug:
-            _safe_log(self.log_fn, f"[DEBUG Detector] {msg}")
+            _safe_log(self.log_fn, f"[DEBUG Holistic] {msg}")
 
     def processar(self, frame_bgr):
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-        return self.detector.detect(mp_image)
+        frame_rgb.flags.writeable = False
+        result = self.holistic.process(frame_rgb)
+        frame_rgb.flags.writeable = True
+        return result
 
     def desenhar(self, frame_bgr, result):
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        annotated = frame_rgb.copy()
+        ann = frame_rgb.copy()
 
-        if result.hand_landmarks:
-            for hand_landmarks in result.hand_landmarks:
-                landmark_list = landmark_pb2.NormalizedLandmarkList()
+        # Pose corporal
+        if result.pose_landmarks:
+            self.mp_draw.draw_landmarks(
+                ann,
+                result.pose_landmarks,
+                self.mp_hol.POSE_CONNECTIONS,
+                self.mp_style.get_default_pose_landmarks_style(),
+            )
 
-                for lm in hand_landmarks:
-                    landmark = landmark_list.landmark.add()
-                    landmark.x = lm.x
-                    landmark.y = lm.y
-                    landmark.z = lm.z
+        # Mão direita
+        if result.right_hand_landmarks:
+            self.mp_draw.draw_landmarks(
+                ann,
+                result.right_hand_landmarks,
+                self.mp_hol.HAND_CONNECTIONS,
+                self.mp_style.get_default_hand_landmarks_style(),
+                self.mp_style.get_default_hand_connections_style(),
+            )
 
-                self.mp_draw.draw_landmarks(
-                    annotated,
-                    landmark_list,
-                    self.mp_connections,
-                    self.mp_style.get_default_hand_landmarks_style(),
-                    self.mp_style.get_default_hand_connections_style(),
-                )
+        # Mão esquerda
+        if result.left_hand_landmarks:
+            self.mp_draw.draw_landmarks(
+                ann,
+                result.left_hand_landmarks,
+                self.mp_hol.HAND_CONNECTIONS,
+                self.mp_style.get_default_hand_landmarks_style(),
+                self.mp_style.get_default_hand_connections_style(),
+            )
 
-        return cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR)
+        return cv2.cvtColor(ann, cv2.COLOR_RGB2BGR)
+
+    # ── Normalizações por região ───────────────────────────────────────────────
 
     @staticmethod
     def _normalizar_mao(pts):
-        """Normalização robusta: centraliza no pulso e escala pela distância da palma."""
+        """Centraliza no pulso (lm 0) e escala pela distância palma→dedo médio (lm 9)."""
         pts = pts.astype(np.float32).copy()
-        center = pts[0].copy()
-        pts -= center
-
-        ref = np.linalg.norm(pts[9] - pts[0])
+        pts -= pts[0]
+        ref = np.linalg.norm(pts[9])
         if ref < 1e-6:
-            ref = np.max(np.abs(pts))
-        if ref < 1e-6:
-            ref = 1.0
+            ref = float(np.max(np.abs(pts))) or 1.0
+        pts /= ref
+        return np.clip(pts, -3.0, 3.0)
 
-        pts /= float(ref)
-        pts = np.clip(pts, -3.0, 3.0)
-        return pts
+    @staticmethod
+    def _normalizar_pose(pts):
+        """Centraliza no centro dos quadris (lm 23+24) e escala pela largura dos ombros (lm 11-12)."""
+        pts = pts.astype(np.float32).copy()
+        centro = (pts[23] + pts[24]) / 2.0 if len(pts) > 24 else pts[0]
+        pts -= centro
+        ref = np.linalg.norm(pts[11] - pts[12]) if len(pts) > 12 else 0.0
+        if ref < 1e-6:
+            ref = float(np.max(np.abs(pts))) or 1.0
+        pts /= ref
+        return np.clip(pts, -5.0, 5.0)
+
+
+    # ── Extração de features ──────────────────────────────────────────────────
+
+    # Mão dominante usada por quem está na câmera ("direita" ou "esquerda").
+    # A mão dominante sempre vai para o slot [0:63] (dominante) e a
+    # auxiliar para [63:126], garantindo compatibilidade entre destros e canhotos.
+    mao_dominante: str = "direita"
 
     def extrair_features(self, result):
-        """Retorna vetor 126 (2 mãos). Se não houver mão: zeros."""
+        """Retorna vetor 225: [dominante(63) | auxiliar(63) | pose(99)].
+
+        Otimizado para LIBRAS: mãos + contexto postural. Sem rosto (custoso, pouco discriminativo).
+        """
         feats = np.zeros(TOTAL_FEATURES, dtype=np.float32)
 
-        if not result.hand_landmarks:
-            return feats
+        if self.mao_dominante == "esquerda":
+            lm_dom = result.left_hand_landmarks
+            lm_aux = result.right_hand_landmarks
+        else:
+            lm_dom = result.right_hand_landmarks
+            lm_aux = result.left_hand_landmarks
 
-        for idx, hand in enumerate(result.hand_landmarks):
-            if idx >= MP_MAX_HANDS:
-                break
+        # Mão dominante [0:63]
+        if lm_dom:
+            pts = np.array([[lm.x, lm.y, lm.z] for lm in lm_dom.landmark], dtype=np.float32)
+            feats[0:FEATURES_MAO] = self._normalizar_mao(pts).flatten()
 
-            pts = np.array([[lm.x, lm.y, lm.z] for lm in hand], dtype=np.float32)
-            pts = self._normalizar_mao(pts)
+        # Mão auxiliar [63:126]
+        if lm_aux:
+            pts = np.array([[lm.x, lm.y, lm.z] for lm in lm_aux.landmark], dtype=np.float32)
+            feats[FEATURES_MAO:FEATURES_MAOS] = self._normalizar_mao(pts).flatten()
 
-            start = idx * FEATURES_PER_HAND
-            end = start + FEATURES_PER_HAND
-            feats[start:end] = pts.flatten()
+        # Pose [126:225]
+        if result.pose_landmarks:
+            pts = np.array([[lm.x, lm.y, lm.z] for lm in result.pose_landmarks.landmark], dtype=np.float32)
+            feats[IDX_POSE_START:] = self._normalizar_pose(pts).flatten()
 
         return feats
 
+    def tem_mao(self, result):
+        """Retorna True se qualquer mão foi detectada."""
+        return result.right_hand_landmarks is not None or result.left_hand_landmarks is not None
+
     def liberar(self):
         try:
-            self.detector.close()
+            self.holistic.close()
         except Exception:
             pass
 
@@ -701,24 +629,31 @@ class GerenciadorModelos:
 
     @staticmethod
     def _espelhar_horizontal(seq):
+        """Inverte coordenada X em mãos e pose."""
         out = seq.copy()
-        for hand_idx in range(MP_MAX_HANDS):
-            start = hand_idx * FEATURES_PER_HAND
-            x_idx = np.arange(start, start + FEATURES_PER_HAND, 3)
+        blocos = [
+            (0,              FEATURES_MAOS),
+            (IDX_POSE_START, FEATURES_POSE),
+        ]
+        for start, length in blocos:
+            x_idx = np.arange(start, start + length, 3)
             out[:, x_idx] *= -1.0
         return out
 
     @staticmethod
     def _rotacionar_xy(seq, ang_deg):
+        """Rotaciona par (X,Y) em mãos e pose."""
         out = seq.copy()
         ang = np.deg2rad(ang_deg)
         c, s = np.cos(ang), np.sin(ang)
 
-        for hand_idx in range(MP_MAX_HANDS):
-            start = hand_idx * FEATURES_PER_HAND
-            x_idx = np.arange(start, start + FEATURES_PER_HAND, 3)
-            y_idx = np.arange(start + 1, start + FEATURES_PER_HAND, 3)
-
+        blocos = [
+            (0,              FEATURES_MAOS),
+            (IDX_POSE_START, FEATURES_POSE),
+        ]
+        for start, length in blocos:
+            x_idx = np.arange(start,     start + length, 3)
+            y_idx = np.arange(start + 1, start + length, 3)
             x = out[:, x_idx]
             y = out[:, y_idx]
             out[:, x_idx] = x * c - y * s
@@ -864,13 +799,22 @@ class GerenciadorModelos:
         if m.exists() and e.exists():
             try:
                 with open(m, "rb") as f:
-                    self.modelo_estatico = pickle.load(f)
+                    mdl = pickle.load(f)
 
+                n_feat = getattr(mdl, "n_features_in_", None)
+                if n_feat is not None and n_feat != TOTAL_FEATURES:
+                    print(
+                        f"⚠ Modelo estático incompatível ({n_feat} features, esperado {TOTAL_FEATURES}). "
+                        "Treine novamente."
+                    )
+                    return
+
+                self.modelo_estatico = mdl
                 with open(e, "rb") as f:
                     self.encoder_estatico = pickle.load(f)
 
             except Exception as exc:
-                print(f"Erro ao carregar modelo estático antigo: {exc}")
+                print(f"Erro ao carregar modelo estático: {exc}")
                 print("O modelo estático será ignorado. Treine novamente pela interface.")
                 self.modelo_estatico = None
                 self.encoder_estatico = None
@@ -880,23 +824,34 @@ class GerenciadorModelos:
     # DINÂMICO — features temporais (usadas pelo RF e pelo KNN)
     # ──────────────────────────────────────────────────────────────────────────
 
+    # Pesos por bloco: mãos são essenciais em LIBRAS, pose fornece contexto
+    _PESOS_BLOCO = np.concatenate([
+        np.full(FEATURES_MAOS, 2.0),  # mãos: essencial
+        np.full(FEATURES_POSE, 1.0),  # pose: contexto
+    ]).astype(np.float32)
+
     @staticmethod
     def _extrair_features_seq(seq):
-        """Converte sequência (N×126) em vetor fixo de features temporais.
+        """Converte sequência (N×1629) em vetor fixo ponderado para KNN.
 
-        Divide em 3 segmentos temporais, calcula média de cada um e
-        a velocidade média (diferença entre frames consecutivos).
-        Resultado: 126×4 = 504 features.
+        Divide em 3 segmentos temporais + velocidade média, depois aplica
+        pesos por bloco (mãos > pose > rosto) para que o KNN coseno foque
+        no que realmente discrimina os sinais.
+        Resultado: 1629×4 = 6516 features ponderadas.
         """
         seq = GerenciadorModelos._pad_or_crop_sequence(
             np.asarray(seq, dtype=np.float32), SEQUENCE_LENGTH
         )
         n3 = SEQUENCE_LENGTH // 3
-        seg1 = seq[:n3].mean(axis=0)           # início do gesto
-        seg2 = seq[n3: 2 * n3].mean(axis=0)   # meio
-        seg3 = seq[2 * n3:].mean(axis=0)       # fim
-        vel = np.diff(seq, axis=0).mean(axis=0)  # velocidade média entre frames
-        return np.concatenate([seg1, seg2, seg3, vel]).astype(np.float32)
+        seg1 = seq[:n3].mean(axis=0)
+        seg2 = seq[n3: 2 * n3].mean(axis=0)
+        seg3 = seq[2 * n3:].mean(axis=0)
+        vel  = np.diff(seq, axis=0).mean(axis=0)
+
+        feat = np.concatenate([seg1, seg2, seg3, vel]).astype(np.float32)
+        # Repete os pesos para cobrir os 4 segmentos
+        pesos = np.tile(GerenciadorModelos._PESOS_BLOCO, 4)
+        return feat * pesos
 
     def _treinar_dinamico_rf(self, Xv, yv, metav, pesos, prioridades, enc, n_classes, log):
         """KNN k=1 para sinais dinâmicos com poucas amostras.
@@ -965,11 +920,22 @@ class GerenciadorModelos:
         if m.exists() and e.exists():
             try:
                 with open(m, "rb") as f:
-                    self.modelo_dinamico_rf = pickle.load(f)
+                    mdl = pickle.load(f)
+
+                n_feat = getattr(mdl, "n_features_in_", None)
+                feat_esperado = TOTAL_FEATURES * 4  # _extrair_features_seq: 4 segmentos
+                if n_feat is not None and n_feat != feat_esperado:
+                    print(
+                        f"⚠ Modelo dinâmico KNN incompatível ({n_feat} features, esperado {feat_esperado}). "
+                        "Treine novamente."
+                    )
+                    return
+
+                self.modelo_dinamico_rf = mdl
                 with open(e, "rb") as f:
                     self.encoder_dinamico_rf = pickle.load(f)
             except Exception as exc:
-                print(f"Erro ao carregar modelo dinâmico RF: {exc}")
+                print(f"Erro ao carregar modelo dinâmico KNN: {exc}")
                 self.modelo_dinamico_rf = None
                 self.encoder_dinamico_rf = None
 
@@ -1367,11 +1333,20 @@ class LibrasApp(tk.Tk):
         self.amostras_alvo = 0
         self.seq_buffer = []
 
+        # Segmentação automática (coleta dinâmica)
+        # Estados: "aguardando_espaco" → [SPACE] → "aguardando_mao" → mão aparece
+        #          → "gravando" → mão some N frames → salva → "aguardando_espaco"
+        self.seg_estado = "aguardando_espaco"
+        self.seg_frames_sem_mao = 0      # contador de frames sem mão após gravação
+        self.SEG_FRAMES_PAUSA = 8        # frames sem mão para confirmar fim do sinal
+
         # Reconhecimento
         self.hold_pred = ""
         self.hold_start = 0.0
         self.seq_rec = []
         self.hand_was_visible = False  # controla disparo de predição dinâmica
+        self.ultimo_pred = ""          # último sinal reconhecido (mantido na tela)
+        self.ultima_conf = 0.0
 
         # Debug/diagnóstico
         self.last_log_rec = 0.0
@@ -1380,6 +1355,7 @@ class LibrasApp(tk.Tk):
         self._ui()
         self._atualizar_status_tensorflow()
         self._iniciar_camera()
+        self.bind("<space>", self._tecla_espaco)
         self.protocol("WM_DELETE_WINDOW", self._fechar)
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -1472,6 +1448,17 @@ class LibrasApp(tk.Tk):
         box = ttk.LabelFrame(aba, text="Ensinar novo sinal", padding=10)
         box.pack(fill=tk.X)
 
+        # Mão dominante — afeta coleta e reconhecimento
+        dom_frame = ttk.LabelFrame(box, text="Mão dominante de quem está na câmera", padding=6)
+        dom_frame.pack(fill=tk.X, pady=(0, 10))
+        self.var_mao_dom = tk.StringVar(value="direita")
+        ttk.Radiobutton(dom_frame, text="✋ Direita (destro)", variable=self.var_mao_dom, value="direita",
+                        command=self._aplicar_mao_dominante).pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(dom_frame, text="🤚 Esquerda (canhoto)", variable=self.var_mao_dom, value="esquerda",
+                        command=self._aplicar_mao_dominante).pack(side=tk.LEFT, padx=10)
+        ttk.Label(dom_frame, text="Mude antes de gravar ou reconhecer!", foreground=COR_YELLOW,
+                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=8)
+
         ttk.Label(box, text="Nome do sinal/letra/número (ex: A, B, 1, OLA, OBRIGADO):").pack(anchor=tk.W)
         self.entry_rotulo = ttk.Entry(box, font=("Segoe UI", 12))
         self.entry_rotulo.pack(fill=tk.X, pady=(2, 8))
@@ -1556,9 +1543,6 @@ class LibrasApp(tk.Tk):
         self.lbl_tf_status = ttk.Label(cfg, text="TensorFlow: verificando...", foreground=COR_YELLOW)
         self.lbl_tf_status.pack(anchor=tk.W, pady=(10, 2))
 
-        self.btn_instalar_tf = ttk.Button(cfg, text="📦 Instalar TensorFlow", style="Danger.TButton", command=self._instalar_tensorflow_ui)
-        self.btn_instalar_tf.pack(anchor=tk.W)
-
         bar = ttk.Frame(aba)
         bar.pack(fill=tk.X, pady=(0, 10))
 
@@ -1630,6 +1614,20 @@ class LibrasApp(tk.Tk):
         if self.var_debug.get():
             self._log(f"[DEBUG] {s}")
 
+    def _tecla_espaco(self, event=None):
+        """Avança para o próximo sinal na coleta dinâmica com segmentação."""
+        if self.coletando and self.tipo_coleta == "dinamico":
+            if self.seg_estado == "aguardando_espaco":
+                self.seg_estado = "aguardando_mao"
+                self.seq_buffer = []
+                self.seg_frames_sem_mao = 0
+
+    def _aplicar_mao_dominante(self):
+        """Atualiza o detector com a mão dominante selecionada."""
+        if self.detector:
+            self.detector.mao_dominante = self.var_mao_dom.get()
+            self._log(f"✋ Mão dominante: {self.detector.mao_dominante}")
+
     def _apagar_ultimo(self):
         c = self.txt.get("1.0", tk.END).rstrip("\n")
         if c:
@@ -1639,33 +1637,7 @@ class LibrasApp(tk.Tk):
     def _atualizar_status_tensorflow(self):
         ok, status = verificar_tensorflow()
         self.lbl_tf_status.configure(text=f"TensorFlow: {status}", foreground=COR_GREEN if ok else COR_RED)
-
-        if ok:
-            self.btn_instalar_tf.configure(state=tk.DISABLED)
-            self.btn_treinar_din.configure(state=tk.NORMAL)
-        else:
-            self.btn_instalar_tf.configure(state=tk.NORMAL)
-            self.btn_treinar_din.configure(state=tk.DISABLED)
-
-    def _instalar_tensorflow_ui(self):
-        self.btn_instalar_tf.configure(state=tk.DISABLED)
-        self._log("📦 Solicitação de instalação do TensorFlow...")
-
-        def job():
-            ok, msg = instalar_tensorflow(log_fn=lambda m: self.after(0, self._log, m))
-            self.after(0, self._log, msg)
-
-            def finish():
-                self._atualizar_status_tensorflow()
-                if ok:
-                    self.modelos._carregar_dinamico()
-                    messagebox.showinfo("TensorFlow", "✅ TensorFlow instalado e pronto para treino dinâmico.")
-                else:
-                    messagebox.showwarning("TensorFlow", msg)
-
-            self.after(0, finish)
-
-        threading.Thread(target=job, daemon=True).start()
+        self.btn_treinar_din.configure(state=tk.NORMAL if ok else tk.DISABLED)
 
     # ──────────────────────────────────────────────────────────────────────────
     # POPUP TIPO
@@ -1731,6 +1703,11 @@ class LibrasApp(tk.Tk):
         self.amostras_alvo = int(self.var_qtd.get())
         self.amostras_coletadas = 0
         self.seq_buffer = []
+
+        # Reseta estado de segmentação automática
+        self.seg_estado = "aguardando_espaco"
+        self.seg_frames_sem_mao = 0
+
         self.coletando = True
 
         self.btn_start_collect.configure(state=tk.DISABLED)
@@ -1793,7 +1770,7 @@ class LibrasApp(tk.Tk):
         if messagebox.askyesno("Confirmar", f"Deletar '{rot}' ({tipo})?"):
             self.dados.deletar_classe(tipo, rot)
             self.entry_del.delete(0, tk.END)
-            self._atualizar_classes()
+            self.after(0, self._atualizar_classes)
             self._log(f"🗑 Classe removida: {rot} ({tipo})")
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -1919,6 +1896,8 @@ class LibrasApp(tk.Tk):
 
     def _parar_rec(self):
         self.reconhecendo = False
+        self.ultimo_pred = ""
+        self.ultima_conf = 0.0
         self.btn_start_rec.configure(state=tk.NORMAL)
         self.btn_stop_rec.configure(state=tk.DISABLED)
         self.lbl_info.configure(text="⏹ Reconhecimento parado.", foreground=COR_YELLOW)
@@ -1927,6 +1906,8 @@ class LibrasApp(tk.Tk):
 
     def _confirmar_pred_direta(self, pred, conf):
         """Confirmação imediata para gestos dinâmicos (disparada ao fim do gesto)."""
+        self.ultimo_pred = pred
+        self.ultima_conf = conf
         self._set_pred_label(pred, conf)
         self.txt.insert(tk.END, pred + " ")
         self.txt.see(tk.END)
@@ -1946,11 +1927,12 @@ class LibrasApp(tk.Tk):
 
         if pred == self.hold_pred:
             if now - self.hold_start >= hold:
+                self.ultimo_pred = pred
+                self.ultima_conf = conf
                 self.txt.insert(tk.END, pred + " ")
                 self.txt.see(tk.END)
                 self.hold_pred = ""
                 self.hold_start = 0.0
-                # Limpar buffer para o próximo sinal começar sem contaminação dos frames anteriores
                 self.seq_rec.clear()
                 self._debug(f"Predição confirmada: {pred} ({conf:.2%})")
         else:
@@ -1963,45 +1945,30 @@ class LibrasApp(tk.Tk):
         else:
             self.lbl_pred.configure(text=pred, foreground=COR_FG)
 
+    def _restaurar_ultimo_pred(self):
+        """Mantém o último resultado visível quando não há gesto ativo."""
+        if self.ultimo_pred:
+            self._set_pred_label(self.ultimo_pred, self.ultima_conf)
+        else:
+            self.lbl_pred.configure(text="—", foreground=COR_FG)
+
     # ──────────────────────────────────────────────────────────────────────────
     # CÂMERA
     # ──────────────────────────────────────────────────────────────────────────
-    def _cb_download_hand(self, baixados, total, pct, velocidade):
-        def ui_update():
-            self.prog["maximum"] = 100
-            self.prog["value"] = min(max(pct, 0.0), 100.0)
-            if total > 0:
-                mb_b = baixados / (1024 * 1024)
-                mb_t = total / (1024 * 1024)
-                mb_s = velocidade / (1024 * 1024)
-                self.lbl_cam.configure(
-                    text=f"⬇ Baixando hand_landmarker.task... {pct:.1f}% ({mb_b:.1f}/{mb_t:.1f} MB) {mb_s:.2f} MB/s",
-                    foreground=COR_YELLOW,
-                )
-            else:
-                self.lbl_cam.configure(text=f"⬇ Baixando hand_landmarker.task... {baixados} bytes", foreground=COR_YELLOW)
-
-        self.after(0, ui_update)
-
     def _inicializar_detector(self):
         try:
-            self.lbl_cam.configure(text="🔎 Verificando hand_landmarker.task...", foreground=COR_YELLOW)
-            self._log("🔎 Verificando arquivo hand_landmarker.task...")
-            resultado = garantir_hand_landmarker(
-                HAND_LANDMARKER_FILE,
-                progress_cb=self._cb_download_hand,
-                log_fn=lambda s: self.after(0, self._log, s),
-            )
-
-            if resultado == "baixado":
-                self._log("✅ hand_landmarker.task baixado automaticamente.")
-
-            self.detector = DetectorMaos(
-                model_path=HAND_LANDMARKER_FILE,
+            self.lbl_cam.configure(text="🔎 Inicializando MediaPipe Holistic...", foreground=COR_YELLOW)
+            self._log("🔎 Inicializando MediaPipe Holistic (mãos + pose + rosto)...")
+            self.detector = DetectorHolistic(
                 debug=self.var_debug.get(),
                 log_fn=lambda s: self.after(0, self._log, s),
             )
-            self.prog["value"] = 0
+            # Aplica mão dominante da UI (pode já ter sido selecionada antes do detector existir)
+            if hasattr(self, "var_mao_dom"):
+                self.detector.mao_dominante = self.var_mao_dom.get()
+            self._log(f"✅ Holistic pronto — {TOTAL_FEATURES} features por frame "
+                      f"(mãos={FEATURES_MAOS}, pose={FEATURES_POSE}) | "
+                      f"mão dominante: {self.detector.mao_dominante}")
             return True
         except Exception as exc:
             self._log(f"❌ Falha ao inicializar detector: {exc}")
@@ -2042,27 +2009,47 @@ class LibrasApp(tk.Tk):
                 feats = self.detector.extrair_features(res)
                 frame = self.detector.desenhar(frame, res)
 
-                tem_mao = bool(res.hand_landmarks)
+                tem_mao = self.detector.tem_mao(res)
 
                 # COLETA
                 if self.coletando:
-                    if tem_mao:
-                        if self.tipo_coleta == "estatico":
+                    if self.tipo_coleta == "estatico":
+                        # Estático: captura frame a frame enquanto há mão
+                        if tem_mao:
                             self.dados.salvar_estatico(self.rotulo_coleta, feats)
                             self.amostras_coletadas += 1
-                        else:
-                            self.seq_buffer.append(feats)
-                            if len(self.seq_buffer) >= SEQUENCE_LENGTH:
-                                seq = np.array(self.seq_buffer[-SEQUENCE_LENGTH:], dtype=np.float32)
-                                if seq.shape[0] >= MIN_DYNAMIC_FRAMES:
-                                    self.dados.salvar_dinamico(self.rotulo_coleta, seq)
-                                    self.amostras_coletadas += 1
+                            self.after(0, self._atualizar_progresso_overlay)
+                            if self.amostras_coletadas >= self.amostras_alvo:
+                                self.after(0, self._finalizar_coleta)
+                    else:
+                        # Dinâmico: segmentação automática com confirmação por ESPAÇO
+                        if self.seg_estado == "aguardando_espaco":
+                            pass  # aguarda tecla Espaço — tratado em _tecla_espaco
+
+                        elif self.seg_estado == "aguardando_mao":
+                            if tem_mao:
+                                self.seg_estado = "gravando"
                                 self.seq_buffer = []
+                                self.seg_frames_sem_mao = 0
 
-                        self.after(0, lambda: self._atualizar_progresso_overlay())
-
-                        if self.amostras_coletadas >= self.amostras_alvo:
-                            self.after(0, self._finalizar_coleta)
+                        elif self.seg_estado == "gravando":
+                            if tem_mao:
+                                self.seg_frames_sem_mao = 0
+                                self.seq_buffer.append(feats)
+                            else:
+                                self.seg_frames_sem_mao += 1
+                                if self.seg_frames_sem_mao >= self.SEG_FRAMES_PAUSA:
+                                    # Sinal terminou: salva e aguarda próximo ESPAÇO
+                                    seq = np.array(self.seq_buffer, dtype=np.float32)
+                                    if seq.shape[0] >= MIN_DYNAMIC_FRAMES:
+                                        self.dados.salvar_dinamico(self.rotulo_coleta, seq)
+                                        self.amostras_coletadas += 1
+                                        self.after(0, self._atualizar_progresso_overlay)
+                                        if self.amostras_coletadas >= self.amostras_alvo:
+                                            self.after(0, self._finalizar_coleta)
+                                    self.seq_buffer = []
+                                    self.seg_estado = "aguardando_espaco"
+                                    self.seg_frames_sem_mao = 0
 
                 # RECONHECIMENTO
                 if self.reconhecendo:
@@ -2088,7 +2075,7 @@ class LibrasApp(tk.Tk):
                         if pred:
                             self.after(0, lambda p=pred, c=conf: self._confirmar_pred(p, c))
                         else:
-                            self.after(0, lambda: self._set_pred_label("...", 0.0))
+                            self.after(0, self._restaurar_ultimo_pred)
 
                         if self.var_debug.get() and (time.time() - self.last_log_rec) > 2.0:
                             self.last_log_rec = time.time()
@@ -2113,21 +2100,32 @@ class LibrasApp(tk.Tk):
                             self.seq_rec = []
 
                         self.hand_was_visible = False
-                        # Só limpa o label se não fez predição (para manter o resultado visível)
                         if not fez_predicao:
-                            self.after(0, lambda: self._set_pred_label("—", 0.0))
+                            self.after(0, self._restaurar_ultimo_pred)
 
                 if self.coletando:
-                    color = (0, 255, 0) if tem_mao else (0, 0, 255)
-                    cv2.putText(
-                        frame,
-                        f"Coleta: {self.rotulo_coleta} ({self.tipo_coleta}) {self.amostras_coletadas}/{self.amostras_alvo}",
-                        (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.75,
-                        color,
-                        2,
-                    )
+                    if self.tipo_coleta == "estatico":
+                        cor = (0, 255, 0) if tem_mao else (0, 0, 255)
+                        texto = f"ESTATICO | {self.rotulo_coleta} | {self.amostras_coletadas}/{self.amostras_alvo}"
+                        cv2.putText(frame, texto, (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.75, cor, 2)
+                    else:
+                        # Dinâmico: overlay por estado
+                        h, w = frame.shape[:2]
+                        if self.seg_estado == "aguardando_espaco":
+                            cv2.rectangle(frame, (0, 0), (w-1, h-1), (200, 200, 0), 4)
+                            cv2.putText(frame, "Pressione ESPACO para gravar",
+                                        (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 220, 220), 2)
+                        elif self.seg_estado == "aguardando_mao":
+                            cv2.rectangle(frame, (0, 0), (w-1, h-1), (0, 200, 0), 4)
+                            cv2.putText(frame, "Mostre as maos e faca o sinal!",
+                                        (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 220, 0), 2)
+                        elif self.seg_estado == "gravando":
+                            cv2.rectangle(frame, (0, 0), (w-1, h-1), (0, 0, 220), 6)
+                            cv2.putText(frame, f"GRAVANDO  {len(self.seq_buffer)} frames",
+                                        (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                        cv2.putText(frame,
+                                    f"{self.rotulo_coleta}  {self.amostras_coletadas}/{self.amostras_alvo}",
+                                    (10, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
 
                 self.after(0, lambda fr=frame: self._exibir(fr))
                 time.sleep(0.02)
@@ -2189,7 +2187,7 @@ if __name__ == "__main__":
     print("TensorFlow:", status_tf)
     print("Dados:", DIR_DADOS)
     print("Modelos:", DIR_MODELOS)
-    print("Hand task:", HAND_LANDMARKER_FILE)
+    print(f"Features: {TOTAL_FEATURES} (mãos={FEATURES_MAOS}, pose={FEATURES_POSE})")
     print("=" * 70)
 
     app = LibrasApp()
