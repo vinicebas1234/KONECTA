@@ -23,8 +23,11 @@ if not exist "%VENV_PYTHON%" (
     exit /b 1
 )
 
-echo [1/4] Instalando dependencias...
+echo [1/5] Instalando dependencias essenciais...
 "%VENV_PYTHON%" -m pip install -q pyinstaller
+
+REM Garante que OpenCV e outras dependências estão instaladas
+"%VENV_PYTHON%" -m pip install -q opencv-python mediapipe numpy scikit-learn pillow
 "%VENV_PYTHON%" -m pip install -q --upgrade setuptools wheel
 
 if errorlevel 1 (
@@ -33,28 +36,36 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [2/4] Limpando arquivos antigos...
-if exist "%DIST_DIR%\Libras_OCR.exe" del "%DIST_DIR%\Libras_OCR.exe"
+echo [2/5] Limpando arquivos antigos...
+if exist "%DIST_DIR%" rmdir /s /q "%DIST_DIR%" >nul 2>&1
 if exist "build\" rmdir /s /q "build\" >nul 2>&1
-if exist "*.spec" del "*.spec" >nul 2>&1
+if exist "*.spec" del /q "*.spec" >nul 2>&1
 
-echo [3/4] Gerando EXE (isso pode levar 2-3 minutos)...
+echo [3/5] Gerando EXE com PyInstaller (isso pode levar 3-5 minutos)...
 cd /d "%OCR_DIR%"
+
 "%VENV_PYTHON%" -m PyInstaller ^
     --onedir ^
     --windowed ^
+    --collect-all=cv2 ^
     --collect-all=mediapipe ^
-    --collect-all=tensorflow ^
     --collect-all=sklearn ^
+    --collect-all=numpy ^
+    --hidden-import=cv2 ^
     --hidden-import=mediapipe ^
     --hidden-import=tensorflow ^
     --hidden-import=sklearn ^
-    --hidden-import=cv2 ^
+    --hidden-import=sklearn.ensemble ^
+    --hidden-import=sklearn.preprocessing ^
+    --hidden-import=sklearn.neighbors ^
+    --hidden-import=sklearn.metrics ^
+    --hidden-import=sklearn.model_selection ^
     --hidden-import=numpy ^
     --hidden-import=tkinter ^
+    --hidden-import=PIL ^
     --distpath "%DIST_DIR%" ^
     --name "Libras_OCR" ^
-    libras_recognizer.py
+    main.py
 
 if errorlevel 1 (
     echo ERRO ao gerar EXE
@@ -62,38 +73,43 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [4/4] Copiando arquivos e limpando temporarios...
+echo [4/5] Copiando dados e modelos...
 
 REM Cria pasta com suporte
-if not exist "%DIST_DIR%\Libras_OCR\dados_libras" (
-    if exist "%OCR_DIR%\dados_libras" (
+if exist "%OCR_DIR%\dados_libras" (
+    if not exist "%DIST_DIR%\Libras_OCR\dados_libras" (
         xcopy "%OCR_DIR%\dados_libras" "%DIST_DIR%\Libras_OCR\dados_libras\" /E /I /Y >nul 2>&1
     )
 )
 
-if not exist "%DIST_DIR%\Libras_OCR\modelos" (
-    if exist "%OCR_DIR%\modelos" (
+if exist "%OCR_DIR%\modelos" (
+    if not exist "%DIST_DIR%\Libras_OCR\modelos" (
         xcopy "%OCR_DIR%\modelos" "%DIST_DIR%\Libras_OCR\modelos\" /E /I /Y >nul 2>&1
     )
 )
 
-REM Limpa temporarios
+echo [5/5] Finalizando (limpando arquivos temporarios)...
 cd /d "%SCRIPT_DIR%"
 if exist "build\" rmdir /s /q "build\" >nul 2>&1
-if exist "*.spec" del "*.spec" >nul 2>&1
+if exist "*.spec" del /q "*.spec" >nul 2>&1
 
 echo.
 echo ==========================================
 echo   SUCESSO!
 echo ==========================================
 echo.
-echo EXE criado em: %DIST_DIR%\Libras_OCR\Libras_OCR.exe
+echo EXE criado em:
+echo   %DIST_DIR%\Libras_OCR\Libras_OCR.exe
 echo.
-echo Opcoes:
-echo   1. Duplo-clique em: %DIST_DIR%\Libras_OCR\Libras_OCR.exe
-echo   2. Crie atalho no Desktop
+echo O EXE ja inclui:
+echo   - Python runtime completo
+echo   - OpenCV, MediaPipe, TensorFlow
+echo   - Todos os dados/modelos
+echo   - Tudo que precisa para funcionar!
 echo.
-echo Para criar atalho no Desktop, execute:
-echo   create_shortcut.bat
+echo Agora pode:
+echo   1. Duplo-clique direto: %DIST_DIR%\Libras_OCR\Libras_OCR.exe
+echo   2. Criar atalho: execute create_shortcut.bat
+echo   3. Compartilhar: copie pasta Libras_OCR para outro PC
 echo.
 pause
