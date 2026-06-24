@@ -941,6 +941,68 @@ class GerenciadorModelos:
         pesos = np.tile(GerenciadorModelos._PESOS_BLOCO, 4)
         return feat * pesos
 
+    @staticmethod
+    def _calcular_similarity_matrix(X_train, y_train, encoder, dtw_matrix, log=None):
+        """Gera matriz de similaridade média entre pares de sinais.
+
+        Retorna DataFrame com distâncias médias e acurácia pairwise.
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            return None
+
+        classes = encoder.classes_
+        n_classes = len(classes)
+
+        # Matriz de distâncias médias
+        sim_matrix = np.zeros((n_classes, n_classes))
+        acc_matrix = np.zeros((n_classes, n_classes))
+
+        y_enc = y_train
+
+        for i in range(n_classes):
+            for j in range(n_classes):
+                # Amostras da classe i e j
+                mask_i = y_enc == i
+                mask_j = y_enc == j
+                idx_i = np.where(mask_i)[0]
+                idx_j = np.where(mask_j)[0]
+
+                if len(idx_i) == 0 or len(idx_j) == 0:
+                    continue
+
+                # Distância média entre pares
+                dists = []
+                for ii in idx_i:
+                    for jj in idx_j:
+                        if ii != jj:
+                            d = dtw_matrix[ii, jj] if dtw_matrix is not None else 0
+                            dists.append(d)
+
+                if dists:
+                    sim_matrix[i, j] = np.mean(dists)
+                    # Acurácia: quantos pares da mesma classe estão mais próximos que da classe j
+                    if i == j:
+                        acc_matrix[i, j] = 1.0
+                    else:
+                        same_class_dist = [dtw_matrix[ii1, ii2] for ii1 in idx_i for ii2 in idx_i if ii1 < ii2]
+                        if same_class_dist and dists:
+                            mean_same = np.mean(same_class_dist)
+                            mean_diff = np.mean(dists)
+                            acc_matrix[i, j] = 1.0 / (1.0 + mean_diff / (mean_same + 1e-6))
+
+        df = pd.DataFrame(
+            sim_matrix,
+            index=classes,
+            columns=classes
+        )
+
+        if log:
+            log(f"✅ Matriz de similaridade gerada ({n_classes}×{n_classes})")
+
+        return df
+
     def _treinar_dinamico_dtw(self, Xv, yv, metav, pesos, prioridades, enc, n_classes, log):
         """DTW k=1 para sinais dinâmicos — compara sequências completas.
 
@@ -999,6 +1061,27 @@ class GerenciadorModelos:
 
         acc_loo = corretos / n_seq if n_seq > 0 else 0.0
 
+        # Gerar matriz de similaridade e relatório
+        if log:
+            log("📊 Gerando análise de similaridade (qual pares são confundíveis)...")
+
+        # Relatório estruturado
+        self.gerar_relatorio_similarity(log=log)
+
+        # Salvar matriz em CSV também (para visualização rápida)
+        sim_df = self._calcular_similarity_matrix(
+            Xv, yv, enc, self.dtw_matrix, log=log
+        )
+
+        if sim_df is not None:
+            sim_path = DIR_MODELOS / f"similarity_matrix_dtw_{timestamp_arquivo()}.csv"
+            try:
+                sim_df.to_csv(sim_path)
+                if log:
+                    log(f"💾 Matriz CSV salva: {sim_path}")
+            except:
+                pass
+
         if log:
             log(f"✅ DTW-KNN PRONTO")
             log(f"📊 Acurácia LOO: {acc_loo:.1%} | Sequências: {n_seq} | Classes: {n_classes}")
@@ -1010,7 +1093,120 @@ class GerenciadorModelos:
             f"Prioridades: {', '.join(sorted(prioridades)) if prioridades else '(nenhuma)'}\n"
             "─" * 50 + "\n"
             "Pronto para reconhecer com DTW (robusto a variação de velocidade).\n"
+            "📊 Veja similarity_matrix_dtw_*.csv para análise de confusões.\n"
         )
+
+    def gerar_relatorio_similarity(self, log=None):
+        """Gera relatório estruturado da similarity matrix para análise."""
+        if self.X_train_dtw is None or self.dtw_matrix is None:
+            return None
+
+        import json
+
+        classes = self.encoder_dtw.classes_
+        n_classes = len(classes)
+
+        relatorio = {
+            "timestamp": datetime.now().isoformat(),
+            "total_sequencias": len(self.X_train_dtw),
+            "total_classes": n_classes,
+            "analise_pairwise": {},
+            "classe_mais_isolada": None,
+            "classe_mais_confundivel": None,
+            "pares_confundíveis": []
+        }
+
+        # Análise por classe
+        for i in range(n_classes):
+            mask_i = self.y_train_dtw == i
+            idx_i = np.where(mask_i)[0]
+
+            # Distância média intra-classe (coesão)
+            intra_dists = []
+            for ii1 in idx_i:
+                for ii2 in idx_i:
+                    if ii1 < ii2:
+                        intra_dists.append(self.dtw_matrix[ii1, ii2])
+
+            intra_mean = np.mean(intra_dists) if intra_dists else np.inf
+
+            # Distância média inter-classe (para a classe mais próxima)
+            inter_dists_min = []
+            for j in range(n_classes):
+                if i == j:
+                    continue
+                mask_j = self.y_train_dtw == j
+                idx_j = np.where(mask_j)[0]
+
+                for ii in idx_i:
+                    for jj in idx_j:
+                        if ii != jj:
+                            inter_dists_min.append(self.dtw_matrix[ii, jj])
+
+            inter_mean = np.mean(inter_dists_min) if inter_dists_min else np.inf
+
+            # Score de isolamento (quanto maior, mais isolado)
+            isolamento = inter_mean / (intra_mean + 1e-6) if intra_mean < np.inf else 0
+
+            relatorio["analise_pairwise"][classes[i]] = {
+                "amostras": len(idx_i),
+                "coesao_intra": float(intra_mean),
+                "distancia_inter_min": float(inter_mean),
+                "isolamento": float(isolamento)
+            }
+
+        # Identificar classes extremas
+        isolamentos = [v["isolamento"] for v in relatorio["analise_pairwise"].values()]
+        if isolamentos:
+            relatorio["classe_mais_isolada"] = max(
+                relatorio["analise_pairwise"].items(),
+                key=lambda x: x[1]["isolamento"]
+            )[0]
+            relatorio["classe_mais_confundivel"] = min(
+                relatorio["analise_pairwise"].items(),
+                key=lambda x: x[1]["isolamento"]
+            )[0]
+
+        # Encontrar pares confundíveis
+        for i in range(n_classes):
+            for j in range(i + 1, n_classes):
+                mask_i = self.y_train_dtw == i
+                mask_j = self.y_train_dtw == j
+                idx_i = np.where(mask_i)[0]
+                idx_j = np.where(mask_j)[0]
+
+                dists = []
+                for ii in idx_i:
+                    for jj in idx_j:
+                        dists.append(self.dtw_matrix[ii, jj])
+
+                dist_media = np.mean(dists) if dists else np.inf
+
+                # Confundível se < 0.5 (escala normalizada)
+                if dist_media < 0.5:
+                    relatorio["pares_confundíveis"].append({
+                        "sinal_1": classes[i],
+                        "sinal_2": classes[j],
+                        "distancia_media": float(dist_media),
+                        "risco": "ALTO" if dist_media < 0.3 else "MÉDIO"
+                    })
+
+        # Ordenar pares confundíveis
+        relatorio["pares_confundíveis"].sort(key=lambda x: x["distancia_media"])
+
+        # Salvar relatório
+        rel_path = DIR_MODELOS / f"similarity_report_dtw_{timestamp_arquivo()}.json"
+        with open(rel_path, "w", encoding="utf-8") as f:
+            json.dump(relatorio, f, indent=2, ensure_ascii=False)
+
+        if log:
+            log(f"📄 Relatório salvo: {rel_path}")
+            log(f"✅ Classe mais isolada: {relatorio['classe_mais_isolada']}")
+            log(f"⚠️  Classe mais confundível: {relatorio['classe_mais_confundivel']}")
+            if relatorio["pares_confundíveis"]:
+                log(f"🔴 {len(relatorio['pares_confundíveis'])} pares confundíveis detectados")
+
+        return relatorio
 
     def prever_dinamico_dtw(self, sequencia):
         """Predição via DTW k=1 (vizinho mais próximo por distância DTW)."""
