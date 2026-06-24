@@ -45,6 +45,12 @@ from sklearn.model_selection import train_test_split
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import LabelEncoder
 
+try:
+    from dtaidistance import dtw
+    DTW_DISPONIVEL = True
+except ImportError:
+    DTW_DISPONIVEL = False
+
 
 try:
     import matplotlib
@@ -502,6 +508,12 @@ class GerenciadorModelos:
         self.modelo_dinamico_rf = None
         self.encoder_dinamico_rf = None
 
+        # Modelo dinâmico por DTW (Dynamic Time Warping)
+        self.X_train_dtw = None  # sequências completas
+        self.y_train_dtw = None  # labels encoded
+        self.encoder_dtw = None
+        self.dtw_matrix = None   # cache de distâncias
+
         self._carregar_estatico()
         self._carregar_dinamico()
 
@@ -929,6 +941,111 @@ class GerenciadorModelos:
         pesos = np.tile(GerenciadorModelos._PESOS_BLOCO, 4)
         return feat * pesos
 
+    def _treinar_dinamico_dtw(self, Xv, yv, metav, pesos, prioridades, enc, n_classes, log):
+        """DTW k=1 para sinais dinâmicos — compara sequências completas.
+
+        Vantagem sobre agregação: robusta a variação de velocidade.
+        Funciona com 10-20 amostras/classe.
+        """
+        if not DTW_DISPONIVEL:
+            if log:
+                log("⚠️  dtaidistance não instalado — usando KNN agregado")
+            return self._treinar_dinamico_rf(Xv, yv, metav, pesos, prioridades, enc, n_classes, log)
+
+        if log:
+            log("🔍 Modo DTW-KNN ativado (sequências temporais completas)")
+            log(f"📦 Armazenando {len(Xv)} sequências de {n_classes} sinais...")
+
+        # Guardar sequências inteiras (não agregadas)
+        self.X_train_dtw = np.array(Xv, dtype=np.float32)
+        self.y_train_dtw = enc.transform(yv)
+        self.encoder_dtw = enc
+
+        # Calcular matriz de DTW (computacionalmente custoso, feito 1x)
+        if log:
+            log(f"📐 Calculando matriz DTW {len(Xv)}×{len(Xv)} (pode levar alguns segundos)...")
+
+        n_seq = len(Xv)
+        self.dtw_matrix = np.zeros((n_seq, n_seq), dtype=np.float32)
+
+        for i in range(n_seq):
+            for j in range(i + 1, n_seq):
+                try:
+                    d = dtw.distance(
+                        Xv[i].astype(np.float64),
+                        Xv[j].astype(np.float64)
+                    )
+                    self.dtw_matrix[i, j] = d
+                    self.dtw_matrix[j, i] = d
+                except Exception as e:
+                    if log:
+                        log(f"⚠️  Erro DTW({i},{j}): {e}")
+                    self.dtw_matrix[i, j] = np.inf
+                    self.dtw_matrix[j, i] = np.inf
+
+            if log and (i + 1) % 10 == 0:
+                log(f"  ... {i + 1}/{n_seq} sequências processadas")
+
+        # Validação: acurácia via LOO (Leave-One-Out) aproximado
+        corretos = 0
+        for i in range(n_seq):
+            # Encontra vizinho mais próximo (excluindo ele mesmo)
+            dists = self.dtw_matrix[i].copy()
+            dists[i] = np.inf
+            idx_viz = np.argmin(dists)
+
+            if self.y_train_dtw[idx_viz] == self.y_train_dtw[i]:
+                corretos += 1
+
+        acc_loo = corretos / n_seq if n_seq > 0 else 0.0
+
+        if log:
+            log(f"✅ DTW-KNN PRONTO")
+            log(f"📊 Acurácia LOO: {acc_loo:.1%} | Sequências: {n_seq} | Classes: {n_classes}")
+            log(f"🎯 Prioridades: {', '.join(sorted(prioridades)) if prioridades else '(nenhuma)'}")
+
+        return (
+            "✅ MODELO DINÂMICO (DTW) TREINADO\n"
+            f"Acurácia LOO: {acc_loo:.1%} | Sequências: {n_seq} | Classes: {n_classes}\n"
+            f"Prioridades: {', '.join(sorted(prioridades)) if prioridades else '(nenhuma)'}\n"
+            "─" * 50 + "\n"
+            "Pronto para reconhecer com DTW (robusto a variação de velocidade).\n"
+        )
+
+    def prever_dinamico_dtw(self, sequencia):
+        """Predição via DTW k=1 (vizinho mais próximo por distância DTW)."""
+        if self.X_train_dtw is None or self.encoder_dtw is None:
+            return None, 0.0
+
+        try:
+            seq = self._pad_or_crop_sequence(sequencia, SEQUENCE_LENGTH).astype(np.float64)
+
+            # Calcular DTW com cada sequência de treino
+            distancias = []
+            for x_train in self.X_train_dtw:
+                d = dtw.distance(seq, x_train.astype(np.float64))
+                distancias.append(d)
+
+            distancias = np.array(distancias)
+            idx_viz = np.argmin(distancias)
+            d_min = distancias[idx_viz]
+
+            # Confiança: inversa da distância normalizada
+            d_max = np.max(distancias)
+            d_media = np.median(distancias)
+
+            if d_max == d_min:
+                confianca = 1.0
+            else:
+                # Escalar: d_min é 1.0, d_media é 0.5
+                confianca = 1.0 - (d_min / d_media) if d_media > 0 else 0.5
+                confianca = np.clip(confianca, 0.0, 1.0)
+
+            rotulo = self.encoder_dtw.classes_[self.y_train_dtw[idx_viz]]
+            return rotulo, confianca
+        except Exception:
+            return None, 0.0
+
     def _treinar_dinamico_rf(self, Xv, yv, metav, pesos, prioridades, enc, n_classes, log):
         """KNN k=1 para sinais dinâmicos com poucas amostras.
 
@@ -1170,9 +1287,19 @@ class GerenciadorModelos:
             log(f"📊 Classes dinâmicas: {qtd_classes} | Amostras: {qtd_amostras}")
             log(f"📊 Média amostras/classe: {amostras_por_classe:.1f}")
 
-        # RF é muito melhor que LSTM quando há poucas amostras por classe
+        # Estratégia por quantidade de dados
         if amostras_por_classe < self._MIN_AMOSTRAS_LSTM:
-            return self._treinar_dinamico_rf(Xv, yv, metav, pesos, prioridades, enc, n_classes, log)
+            # < 10 amostras/classe: usar DTW se disponível (melhor que KNN agregado)
+            if DTW_DISPONIVEL:
+                return self._treinar_dinamico_dtw(Xv, yv, metav, pesos, prioridades, enc, n_classes, log)
+            else:
+                return self._treinar_dinamico_rf(Xv, yv, metav, pesos, prioridades, enc, n_classes, log)
+        elif amostras_por_classe < 20:
+            # 10-20 amostras/classe: DTW é ótimo aqui (sequências completas, robusto)
+            if DTW_DISPONIVEL:
+                return self._treinar_dinamico_dtw(Xv, yv, metav, pesos, prioridades, enc, n_classes, log)
+            else:
+                return self._treinar_dinamico_rf(Xv, yv, metav, pesos, prioridades, enc, n_classes, log)
 
         # --- LSTM path (muitas amostras) ---
         y_enc = enc.transform(yv)
@@ -1326,7 +1453,11 @@ class GerenciadorModelos:
 
 
     def prever_dinamico(self, sequencia):
-        # RF tem prioridade quando disponível (funciona melhor com poucos dados)
+        # DTW tem prioridade (melhor que agregação para variação de velocidade)
+        if self.X_train_dtw is not None:
+            return self.prever_dinamico_dtw(sequencia)
+
+        # Fallback: KNN agregado
         if self.modelo_dinamico_rf is not None:
             return self.prever_dinamico_rf(sequencia)
 
