@@ -4,9 +4,10 @@
 
 ### **Passo 1: Gerar o EXE**
 
-1. Duplo-clique em: `C:\KONECTA\gerar_exe.bat`
-2. Espera uns 2-3 minutos (primeira vez é mais lenta)
-3. Pronto! EXE está em: `C:\KONECTA\dist\Libras_OCR.exe`
+1. Delete a pasta `C:\KONECTA\dist` se existir (para limpar versão anterior)
+2. Duplo-clique em: `C:\KONECTA\gerar_exe.bat`
+3. Espera uns 3-5 minutos (primeira vez é mais lenta)
+4. Pronto! EXE está em: `C:\KONECTA\dist\Libras_OCR\Libras_OCR.exe`
 
 ---
 

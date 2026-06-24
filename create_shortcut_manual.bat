@@ -5,7 +5,7 @@ setlocal enabledelayedexpansion
 
 set SCRIPT_DIR=%~dp0
 set DIST_DIR=%SCRIPT_DIR%dist
-set EXE_PATH=%DIST_DIR%\Libras_OCR.exe
+set EXE_PATH=%DIST_DIR%\Libras_OCR\Libras_OCR.exe
 
 cls
 echo.
@@ -17,7 +17,9 @@ echo.
 REM Verifica se EXE existe
 if not exist "%EXE_PATH%" (
     echo ERRO: EXE nao encontrado em %EXE_PATH%
-    echo Execute gerar_exe.bat primeiro!
+    echo.
+    echo Verifique se executou: gerar_exe.bat
+    echo.
     pause
     exit /b 1
 )

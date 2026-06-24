@@ -23,27 +23,35 @@ if not exist "%VENV_PYTHON%" (
     exit /b 1
 )
 
-echo [1/4] Instalando PyInstaller...
+echo [1/4] Instalando dependencias...
 "%VENV_PYTHON%" -m pip install -q pyinstaller
+"%VENV_PYTHON%" -m pip install -q --upgrade setuptools wheel
 
 if errorlevel 1 (
-    echo ERRO ao instalar PyInstaller
+    echo ERRO ao instalar dependencias
     pause
     exit /b 1
 )
 
-echo [2/4] Gerando EXE (isso pode levar 1-2 minutos)...
+echo [2/4] Limpando arquivos antigos...
+if exist "%DIST_DIR%\Libras_OCR.exe" del "%DIST_DIR%\Libras_OCR.exe"
+if exist "build\" rmdir /s /q "build\" >nul 2>&1
+if exist "*.spec" del "*.spec" >nul 2>&1
+
+echo [3/4] Gerando EXE (isso pode levar 2-3 minutos)...
 cd /d "%OCR_DIR%"
 "%VENV_PYTHON%" -m PyInstaller ^
-    --onefile ^
+    --onedir ^
     --windowed ^
-    --icon="%OCR_DIR%\icon.ico" ^
-    --add-data "dados_libras;dados_libras" ^
-    --add-data "modelos;modelos" ^
+    --collect-all=mediapipe ^
+    --collect-all=tensorflow ^
+    --collect-all=sklearn ^
     --hidden-import=mediapipe ^
     --hidden-import=tensorflow ^
     --hidden-import=sklearn ^
     --hidden-import=cv2 ^
+    --hidden-import=numpy ^
+    --hidden-import=tkinter ^
     --distpath "%DIST_DIR%" ^
     --name "Libras_OCR" ^
     libras_recognizer.py
@@ -54,18 +62,22 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [3/4] Copiando arquivos necessarios...
+echo [4/4] Copiando arquivos e limpando temporarios...
 
 REM Cria pasta com suporte
-if not exist "%DIST_DIR%\dados_libras" (
-    xcopy "%OCR_DIR%\dados_libras" "%DIST_DIR%\dados_libras\" /E /I /Y >nul 2>&1
+if not exist "%DIST_DIR%\Libras_OCR\dados_libras" (
+    if exist "%OCR_DIR%\dados_libras" (
+        xcopy "%OCR_DIR%\dados_libras" "%DIST_DIR%\Libras_OCR\dados_libras\" /E /I /Y >nul 2>&1
+    )
 )
 
-if not exist "%DIST_DIR%\modelos" (
-    xcopy "%OCR_DIR%\modelos" "%DIST_DIR%\modelos\" /E /I /Y >nul 2>&1
+if not exist "%DIST_DIR%\Libras_OCR\modelos" (
+    if exist "%OCR_DIR%\modelos" (
+        xcopy "%OCR_DIR%\modelos" "%DIST_DIR%\Libras_OCR\modelos\" /E /I /Y >nul 2>&1
+    )
 )
 
-echo [4/4] Limpando arquivos temporarios...
+REM Limpa temporarios
 cd /d "%SCRIPT_DIR%"
 if exist "build\" rmdir /s /q "build\" >nul 2>&1
 if exist "*.spec" del "*.spec" >nul 2>&1
@@ -75,12 +87,11 @@ echo ==========================================
 echo   SUCESSO!
 echo ==========================================
 echo.
-echo EXE criado em: %DIST_DIR%\Libras_OCR.exe
+echo EXE criado em: %DIST_DIR%\Libras_OCR\Libras_OCR.exe
 echo.
 echo Opcoes:
-echo   1. Duplo-clique em: %DIST_DIR%\Libras_OCR.exe
+echo   1. Duplo-clique em: %DIST_DIR%\Libras_OCR\Libras_OCR.exe
 echo   2. Crie atalho no Desktop
-echo   3. Adicione ao Menu Iniciar
 echo.
 echo Para criar atalho no Desktop, execute:
 echo   create_shortcut.bat
