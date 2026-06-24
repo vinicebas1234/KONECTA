@@ -1892,7 +1892,11 @@ class LibrasApp(tk.Tk):
         if modo in ("estatico", "ambos") and self.modelos.modelo_estatico is None:
             messagebox.showwarning("Aviso", "Treine o modelo estático primeiro.")
             return
-        if modo in ("dinamico", "ambos") and self.modelos.modelo_dinamico is None:
+        tem_modelo_din = (
+            self.modelos.modelo_dinamico_rf is not None or
+            self.modelos.modelo_dinamico is not None
+        )
+        if modo in ("dinamico", "ambos") and not tem_modelo_din:
             messagebox.showwarning("Aviso", "Treine o modelo dinâmico primeiro.")
             return
 
@@ -2086,10 +2090,15 @@ class LibrasApp(tk.Tk):
                             if len(self.seq_rec) >= MIN_DYNAMIC_FRAMES:
                                 seq = np.array(self.seq_rec[-SEQUENCE_LENGTH:], dtype=np.float32)
                                 p, c = self.modelos.prever_dinamico(seq)
-                                if self.var_debug.get():
-                                    self.after(0, self._log, f"[DEBUG] Predição dinâmica: {p} ({c:.2%}) | frames={len(self.seq_rec)}")
-                                if p and c >= lim:
+                                # Sempre loga o resultado para facilitar diagnóstico
+                                self.after(0, self._log, f"🔍 Gesto detectado: '{p}' (confiança {c:.1%}) | {len(self.seq_rec)} frames")
+                                # Para gestos dinâmicos disparados por saída da mão,
+                                # usa limiar menor (0.15) pois o RF com muitas classes raramente passa de 0.5
+                                lim_din = max(0.15, lim * 0.4)
+                                if p and c >= lim_din:
                                     self.after(0, lambda p=p, c=c: self._confirmar_pred_direta(p, c))
+                                else:
+                                    self.after(0, lambda p=p, c=c: self._set_pred_label(f"{p}?", c))
                             self.seq_rec = []
 
                         self.hand_was_visible = False
