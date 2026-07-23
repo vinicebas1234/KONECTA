@@ -111,7 +111,7 @@ class PipelineService:
                         landmarks_array[frame_idx, ponto_idx, 1] = ponto.y
                         landmarks_array[frame_idx, ponto_idx, 2] = ponto.z
 
-        # Criar amostra
+        # Criar amostra com dados de tracking
         amostra = Amostra(
             id=sessao.id,
             sinal=sinal,
@@ -124,6 +124,10 @@ class PipelineService:
             confianca_media=np.mean(
                 [lm.confianca_media for lm in landmarks_maos]
             ) if landmarks_maos else 0.0,
+            # Tracking Engine (Etapa 6)
+            dominancia=analise_trajetoria.dominancia,
+            velocidade_media=analise_trajetoria.velocidade_media_geral,
+            complexidade=analise_trajetoria.complexidade_estimada,
         )
 
         return amostra
