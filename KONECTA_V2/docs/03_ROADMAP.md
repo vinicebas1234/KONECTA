@@ -11,7 +11,7 @@ funcionalidades. A V1 serve apenas como referencia de regras de negocio.
 | 3 | Backend | **Concluida** | FastAPI + WebSocket em `backend/`: REST (`/api/*`) + progresso em tempo real (`/ws/analise`); adaptador somente leitura do dataset V1 |
 | 4 | Capture Engine | **Iniciada** | Captura de vídeo (webcam/arquivo) + validação de iluminação e movimento |
 | 5 | MediaPipe Engine | **Iniciada** | Extração de landmarks (mãos + corpo) com fallback gracioso |
-| 6 | Tracking Engine | Pendente | Define o layout de pontos (destrava dominancia e "principal diferenca") |
+| 6 | Tracking Engine | **Iniciada** | Análise de trajetórias, detecção de dominância e localização de gestos |
 | 7 | Dataset Engine | **Concluida** | Abstração de fontes (V1 dinâmicos, V1 estáticos, sintético) com cache thread-safe; todo dataset loading centralizado |
 | 8 | Knowledge Engine | **Iniciada** | Nucleo implementado na etapa 1; evoluir junto com as etapas 4-7 |
 | 9 | AI Engine | Pendente | Treinamento/avaliacao; exporta metricas para o AI Research Assistant |
