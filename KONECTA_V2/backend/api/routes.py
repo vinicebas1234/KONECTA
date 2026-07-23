@@ -15,6 +15,10 @@ from backend.services.capture_service import (
     obter_metadados,
     validar_sessao,
 )
+from backend.services.pipeline_service import (
+    obter_analise_trajetoria,
+    processar_sessao_completa,
+)
 from knowledge.ai_assistant import AIResearchAssistant, ProvedorAnthropic
 from knowledge.reports import ReportGenerator
 
@@ -161,5 +165,57 @@ async def extrair_landmarks_sessao(
             incluir_maos,
             incluir_corpo,
         )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+# === Pipeline End-to-End (Etapas 4-6 + Knowledge Engine) ===
+
+
+@router.post("/pipeline/processar")
+async def processar_pipeline_completo(
+    id_sessao: str,
+    sinal: str,
+    sinalizante: str,
+) -> dict:
+    """Processa pipeline completo: captura → landmarks → tracking → análise.
+
+    Etapas:
+    1. Captura (Etapa 4): Recupera frames da sessão
+    2. MediaPipe (Etapa 5): Extrai 21 pontos de mão
+    3. Tracking (Etapa 6): Analisa trajetórias, dominância, localização
+    4. Amostra: Converte em Core type (pronto para Knowledge Engine)
+
+    Retorna:
+    - Metadados da amostra
+    - Análise de trajetória
+    - Tensor de landmarks para ML
+    """
+    try:
+        return await run_in_threadpool(
+            processar_sessao_completa,
+            id_sessao,
+            sinal,
+            sinalizante,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/pipeline/sessao/{id_sessao}/trajetoria")
+async def obter_trajetoria_analise(id_sessao: str) -> dict:
+    """Recupera análise de trajetória de uma sessão processada.
+
+    Retorna:
+    - Dominância (direita/esquerda/ambas)
+    - Local principal (alto/baixo/neutro)
+    - Complexidade estimada
+    - Velocidade e estabilidade de cada mão
+    """
+    try:
+        analise = await run_in_threadpool(obter_analise_trajetoria, id_sessao)
+        if not analise:
+            raise ValueError(f"Análise de '{id_sessao}' não encontrada")
+        return analise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
