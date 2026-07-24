@@ -120,26 +120,12 @@ export default function Reconhecimento() {
         console.log(`✓ Detectadas ${results.multiHandLandmarks.length} mão(s)`)
 
         // Desenhar landmarks
-        for (let hand of results.multiHandLandmarks) {
-          // Desenhar pontos
-          for (let i = 0; i < hand.length; i++) {
-            const point = hand[i]
-            const x = point.x * canvasRef.current.width
-            const y = point.y * canvasRef.current.height
+        for (let handIdx = 0; handIdx < results.multiHandLandmarks.length; handIdx++) {
+          const hand = results.multiHandLandmarks[handIdx]
+          const w = canvasRef.current.width
+          const h = canvasRef.current.height
 
-            // Desenhar círculo
-            ctx.fillStyle = '#00FF00'
-            ctx.beginPath()
-            ctx.arc(x, y, 5, 0, 2 * Math.PI)
-            ctx.fill()
-
-            // Desenhar número do ponto
-            ctx.fillStyle = '#FFFFFF'
-            ctx.font = 'bold 10px Arial'
-            ctx.fillText(i, x + 7, y - 7)
-          }
-
-          // Desenhar conexões (skeleton)
+          // Desenhar conexões (skeleton) PRIMEIRO para aparecer atrás
           const connections = [
             [0, 1], [1, 2], [2, 3], [3, 4],           // Polegar
             [5, 6], [6, 7], [7, 8],                   // Índice
@@ -149,14 +135,34 @@ export default function Reconhecimento() {
             [0, 5], [5, 9], [9, 13], [13, 17], [17, 0] // Palma
           ]
 
-          ctx.strokeStyle = '#00FF00'
-          ctx.lineWidth = 2
+          ctx.strokeStyle = '#FF0000'
+          ctx.lineWidth = 3
           for (let [start, end] of connections) {
             const p1 = hand[start]
             const p2 = hand[end]
+            if (p1 && p2) {
+              ctx.beginPath()
+              ctx.moveTo(p1.x * w, p1.y * h)
+              ctx.lineTo(p2.x * w, p2.y * h)
+              ctx.stroke()
+            }
+          }
+
+          // Desenhar pontos DEPOIS para aparecer na frente
+          for (let i = 0; i < hand.length; i++) {
+            const point = hand[i]
+            const x = point.x * w
+            const y = point.y * h
+
+            // Desenhar círculo verde
+            ctx.fillStyle = '#00FF00'
             ctx.beginPath()
-            ctx.moveTo(p1.x * canvasRef.current.width, p1.y * canvasRef.current.height)
-            ctx.lineTo(p2.x * canvasRef.current.width, p2.y * canvasRef.current.height)
+            ctx.arc(x, y, 6, 0, 2 * Math.PI)
+            ctx.fill()
+
+            // Borda branca
+            ctx.strokeStyle = '#FFFFFF'
+            ctx.lineWidth = 1.5
             ctx.stroke()
           }
         }

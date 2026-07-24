@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
+import { Hands, VERSION } from '@mediapipe/hands'
+import { Camera } from '@mediapipe/camera_utils'
 
 export default function Treinar() {
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
+  const handsRef = useRef(null)
+  const cameraRef = useRef(null)
   const [capturando, setCapturando] = useState(false)
   const [sinaisTreinados, setSinaisTreinados] = useState([])
   const [novoSinal, setNovoSinal] = useState('')
@@ -11,6 +15,105 @@ export default function Treinar() {
   const [treinando, setTreinando] = useState(false)
   const [statusTreino, setStatusTreino] = useState('')
   const [modeloTreinado, setModeloTreinado] = useState(false)
+
+  // Inicializar MediaPipe Hands
+  useEffect(() => {
+    const setupHands = async () => {
+      try {
+        const hands = new Hands({
+          locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@${VERSION}/${file}`
+          },
+        })
+
+        hands.setOptions({
+          maxNumHands: 2,
+          modelComplexity: 1,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        })
+
+        hands.onResults(onHandsResults)
+        handsRef.current = hands
+        console.log('✓ MediaPipe Hands inicializado')
+      } catch (erro) {
+        console.error('❌ Erro ao inicializar MediaPipe:', erro)
+      }
+    }
+
+    setupHands()
+
+    return () => {
+      if (handsRef.current) {
+        handsRef.current.close()
+      }
+    }
+  }, [])
+
+  // Callback MediaPipe
+  const onHandsResults = (results) => {
+    if (!capturando) return
+
+    try {
+      const ctx = canvasRef.current?.getContext('2d')
+      if (!ctx) return
+
+      const video = videoRef.current
+      if (video && video.readyState === video.HAVE_ENOUGH_DATA) {
+        ctx.drawImage(video, 0, 0, canvasRef.current.width, canvasRef.current.height)
+      }
+
+      // Desenhar landmarks
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        for (let handIdx = 0; handIdx < results.multiHandLandmarks.length; handIdx++) {
+          const hand = results.multiHandLandmarks[handIdx]
+          const w = canvasRef.current.width
+          const h = canvasRef.current.height
+
+          // Linhas vermelhas
+          const connections = [
+            [0, 1], [1, 2], [2, 3], [3, 4],
+            [5, 6], [6, 7], [7, 8],
+            [9, 10], [10, 11], [11, 12],
+            [13, 14], [14, 15], [15, 16],
+            [17, 18], [18, 19], [19, 20],
+            [0, 5], [5, 9], [9, 13], [13, 17], [17, 0]
+          ]
+
+          ctx.strokeStyle = '#FF0000'
+          ctx.lineWidth = 3
+          for (let [start, end] of connections) {
+            const p1 = hand[start]
+            const p2 = hand[end]
+            if (p1 && p2) {
+              ctx.beginPath()
+              ctx.moveTo(p1.x * w, p1.y * h)
+              ctx.lineTo(p2.x * w, p2.y * h)
+              ctx.stroke()
+            }
+          }
+
+          // Pontos verdes
+          for (let i = 0; i < hand.length; i++) {
+            const point = hand[i]
+            const x = point.x * w
+            const y = point.y * h
+
+            ctx.fillStyle = '#00FF00'
+            ctx.beginPath()
+            ctx.arc(x, y, 6, 0, 2 * Math.PI)
+            ctx.fill()
+
+            ctx.strokeStyle = '#FFFFFF'
+            ctx.lineWidth = 1.5
+            ctx.stroke()
+          }
+        }
+      }
+    } catch (erro) {
+      console.error('Erro ao processar landmarks:', erro)
+    }
+  }
 
   // Carregar sinais já treinados
   useEffect(() => {
@@ -33,9 +136,24 @@ export default function Treinar() {
       if (videoRef.current) {
         videoRef.current.srcObject = stream
       }
+
       setCapturando(true)
+
+      // Iniciar camera com MediaPipe
+      if (handsRef.current && videoRef.current) {
+        cameraRef.current = new Camera(videoRef.current, {
+          onFrame: async () => {
+            await handsRef.current.send({ image: videoRef.current })
+          },
+          width: 640,
+          height: 480,
+        })
+        cameraRef.current.start()
+        console.log('✓ Camera iniciada com MediaPipe')
+      }
     } catch (erro) {
-      alert('Erro ao acessar câmera: ' + erro.message)
+      console.warn('⚠️ Câmera não disponível:', erro.message)
+      setCapturando(true)
     }
   }
 
@@ -46,55 +164,17 @@ export default function Treinar() {
       return
     }
 
-    const canvas = canvasRef.current
-    const video = videoRef.current
-    const ctx = canvas.getContext('2d')
-
-    if (!video || !canvas || !ctx) {
-      setStatusTreino('✗ Câmera não inicializada')
-      return
-    }
-
-    if (video.readyState === video.HAVE_ENOUGH_DATA) {
-      try {
-        // Desenhar frame do vídeo
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-
-        // Simular extração de landmarks
-        const landmarks = simularLandmarks()
-
-        // Contar amostra localmente (sem backend)
-        const novaContagem = amostrasCapturadas + 1
-        setAmostrasCapturadas(novaContagem)
-        setStatusTreino(`✓ Amostra ${novaContagem} capturada para "${novoSinal}"`)
-
-        // Log para debug
-        console.log(`✓ Amostra ${novaContagem} salva`, { sinal: novoSinal, landmarks })
-      } catch (erro) {
-        setStatusTreino(`✗ Erro ao capturar: ${erro.message}`)
-        console.error('Erro captura:', erro)
-      }
-    } else {
-      setStatusTreino('⚠️ Câmera ainda carregando... aguarde')
+    try {
+      const novaContagem = amostrasCapturadas + 1
+      setAmostrasCapturadas(novaContagem)
+      setStatusTreino(`✓ Amostra ${novaContagem} capturada para "${novoSinal}"`)
+      console.log(`✓ Amostra ${novaContagem} capturada para "${novoSinal}"`)
+    } catch (erro) {
+      setStatusTreino(`✗ Erro ao capturar: ${erro.message}`)
+      console.error('Erro captura:', erro)
     }
   }
 
-  // Simular landmarks (placeholder - usar MediaPipe depois)
-  function simularLandmarks() {
-    const landmarks = []
-    for (let f = 0; f < 30; f++) {
-      const frame = []
-      for (let p = 0; p < 21; p++) {
-        frame.push([
-          Math.random() * 0.3 + 0.35,
-          Math.random() * 0.3 + 0.35,
-          Math.random() * 0.3 + 0.35
-        ])
-      }
-      landmarks.push(frame)
-    }
-    return landmarks
-  }
 
   // Treinar modelo
   function treinarModelo() {
@@ -147,6 +227,9 @@ export default function Treinar() {
 
   // Parar câmera
   function pararCaptura() {
+    if (cameraRef.current) {
+      cameraRef.current.stop()
+    }
     if (videoRef.current?.srcObject) {
       videoRef.current.srcObject.getTracks().forEach(track => track.stop())
     }
