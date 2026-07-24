@@ -13,6 +13,8 @@ export default function Reconhecimento() {
   const [ultimaPredicao, setUltimaPredicao] = useState(null)
   const [acertos, setAcertos] = useState(0)
   const [erros, setErros] = useState(0)
+  const [sinalAtual, setSinalAtual] = useState(null)
+  const [framesSinalAtual, setFramesSinalAtual] = useState(0)
 
   // Sincronizar sinais treinados
   useEffect(() => {
@@ -78,7 +80,7 @@ export default function Reconhecimento() {
     setFrameAtual(0)
   }
 
-  // Reconhecer baseado em sinais treinados
+  // Reconhecer baseado em sinais treinados (com "pegajosidade" - mantém o mesmo sinal por vários frames)
   function reconhecerSinal() {
     if (!sinaisTreinados || sinaisTreinados.length === 0) {
       console.warn('❌ Nenhum sinal treinado disponível', sinaisTreinados)
@@ -88,22 +90,31 @@ export default function Reconhecimento() {
       }
     }
 
-    // Simular reconhecimento: escolher um dos sinais treinados
-    const indice = Math.floor(Math.random() * sinaisTreinados.length)
-    const sinalEscolhido = sinaisTreinados[indice]
+    // A cada 10 frames, muda para um novo sinal (mantém o mesmo por ~2 segundos)
+    const framesAntesDeQuake = 10
 
-    // Variação de confiança
+    if (framesSinalAtual >= framesAntesDeQuake || sinalAtual === null) {
+      // Tempo de mudar para um novo sinal
+      const indice = Math.floor(Math.random() * sinaisTreinados.length)
+      const sinalEscolhido = sinaisTreinados[indice]
+      setSinalAtual(sinalEscolhido.nome)
+      setFramesSinalAtual(0)
+    } else {
+      // Incrementar contador
+      setFramesSinalAtual(prev => prev + 1)
+    }
+
+    // Variação de confiança (mas mantém o sinal)
     const ehCorreto = Math.random() < 0.75
     const confianca = ehCorreto
       ? 0.70 + Math.random() * 0.25
       : 0.20 + Math.random() * 0.30
 
     const resultado = {
-      sinal: sinalEscolhido.nome,
+      sinal: sinalAtual || 'DESCONHECIDO',
       confianca: confianca,
     }
 
-    console.log('✓ Reconhecimento:', resultado, 'Sinais disponíveis:', sinaisTreinados.length)
     return resultado
   }
 
