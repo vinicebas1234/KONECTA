@@ -46,6 +46,8 @@ export default function Reconhecimento() {
       setCapturando(true)
       setAcertos(0)
       setErros(0)
+      setPredicoes([])
+      setFrameAtual(0)
       processarFrames()
     } catch (erro) {
       alert('Erro ao acessar câmera: ' + erro.message)
@@ -75,7 +77,7 @@ export default function Reconhecimento() {
     const indice = Math.floor(Math.random() * sinaisTreinados.length)
     const sinalEscolhido = sinaisTreinados[indice]
 
-    // Variação de confiança (70-95% para correto, 20-50% para errado)
+    // Variação de confiança
     const ehCorreto = Math.random() < 0.75
     const confianca = ehCorreto
       ? 0.70 + Math.random() * 0.25
@@ -184,7 +186,7 @@ export default function Reconhecimento() {
             />
 
             {/* Overlay com Feedback */}
-            {capturando && ultimaPredicao && (
+            {capturando && (
               <div className="absolute inset-0 flex flex-col justify-between p-4">
                 <div className="flex justify-between">
                   <div className="bg-black/60 text-white text-xs px-2 py-1 rounded">
@@ -195,41 +197,56 @@ export default function Reconhecimento() {
                   </div>
                 </div>
 
-                {/* Resultado Grande e Colorido */}
-                <motion.div
-                  key={ultimaPredicao.frame}
-                  initial={{ scale: 0.8, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  className={`
-                    text-center p-4 rounded-lg font-bold text-white text-3xl
-                    ${ultimaPredicao.confianca > 0.65
-                      ? 'bg-green-600/80'
-                      : ultimaPredicao.confianca > 0.45
-                      ? 'bg-yellow-600/80'
-                      : 'bg-red-600/80'
-                    }
-                  `}
-                >
-                  <p>{ultimaPredicao.sinal}</p>
-                  <p className="text-lg mt-1">
-                    {(ultimaPredicao.confianca * 100).toFixed(0)}%
-                  </p>
-                </motion.div>
+                {/* Mostrar feedback ou "Processando" */}
+                {ultimaPredicao ? (
+                  <>
+                    {/* Resultado Grande e Colorido */}
+                    <motion.div
+                      key={ultimaPredicao.frame}
+                      initial={{ scale: 0.8, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      className={`
+                        text-center p-4 rounded-lg font-bold text-white text-3xl
+                        ${ultimaPredicao.confianca > 0.65
+                          ? 'bg-green-600/80'
+                          : ultimaPredicao.confianca > 0.45
+                          ? 'bg-yellow-600/80'
+                          : 'bg-red-600/80'
+                        }
+                      `}
+                    >
+                      <p>{ultimaPredicao.sinal}</p>
+                      <p className="text-lg mt-1">
+                        {(ultimaPredicao.confianca * 100).toFixed(0)}%
+                      </p>
+                    </motion.div>
 
-                {/* Status */}
-                <div className="bg-black/80 text-white text-sm p-3 rounded space-y-1 text-center">
-                  <p className="font-bold">
-                    {ultimaPredicao.confianca > 0.65
-                      ? '✅ CORRETO!'
-                      : ultimaPredicao.confianca > 0.45
-                      ? '⚠️ INCERTO'
-                      : '❌ ERRADO'
-                    }
-                  </p>
-                  <p className="text-xs">
-                    Acertos: {acertos} | Erros: {erros}
-                  </p>
-                </div>
+                    {/* Status */}
+                    <div className="bg-black/80 text-white text-sm p-3 rounded space-y-1 text-center">
+                      <p className="font-bold">
+                        {ultimaPredicao.confianca > 0.65
+                          ? '✅ CORRETO!'
+                          : ultimaPredicao.confianca > 0.45
+                          ? '⚠️ INCERTO'
+                          : '❌ ERRADO'
+                        }
+                      </p>
+                      <p className="text-xs">
+                        Acertos: {acertos} | Erros: {erros}
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <motion.div
+                      animate={{ scale: [1, 1.1, 1] }}
+                      transition={{ repeat: Infinity, duration: 1 }}
+                      className="bg-black/80 text-white text-2xl font-bold p-6 rounded-lg"
+                    >
+                      🔄 Processando...
+                    </motion.div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -263,23 +280,23 @@ export default function Reconhecimento() {
           <div className="bg-surface border border-white/10 rounded-lg p-4 space-y-3">
             <h3 className="text-sm font-semibold text-ink">📊 Estatísticas</h3>
 
-            {estatisticas ? (
+            {estatisticas && capturando ? (
               <div className="space-y-2 text-xs text-ink2">
                 <div>
                   <p className="text-muted">Frames processados</p>
-                  <p className="text-lg font-bold text-ink">{estatisticas.frameTotal}</p>
+                  <p className="text-2xl font-bold text-ink">{estatisticas.frameTotal}</p>
                 </div>
 
                 <div>
                   <p className="text-muted">Confiança média</p>
-                  <p className="text-lg font-bold text-serie">
+                  <p className="text-2xl font-bold text-serie">
                     {(estatisticas.confiancaMedia * 100).toFixed(1)}%
                   </p>
                 </div>
 
                 <div>
                   <p className="text-muted">Sinal dominante</p>
-                  <p className="text-lg font-bold text-ink">
+                  <p className="text-xl font-bold text-ink">
                     {estatisticas.sinalMaisFrequente}
                   </p>
                 </div>
