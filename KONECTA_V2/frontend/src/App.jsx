@@ -3,6 +3,8 @@ import { motion } from 'framer-motion'
 import { executarAnalise, obterAnalise, obterFontes } from './api.js'
 import Dashboard from './pages/Dashboard.jsx'
 import Reconhecimento from './pages/Reconhecimento.jsx'
+import Tracking from './pages/Tracking.jsx'
+import Treinar from './pages/Treinar.jsx'
 import Qualidade from './pages/Qualidade.jsx'
 import Perfis from './pages/Perfis.jsx'
 import Recomendacoes from './pages/Recomendacoes.jsx'
@@ -11,6 +13,8 @@ import Relatorio from './pages/Relatorio.jsx'
 const PAGINAS = [
   { id: 'dashboard', rotulo: 'Dashboard', Componente: Dashboard },
   { id: 'reconhecimento', rotulo: 'Reconhecimento', Componente: Reconhecimento },
+  { id: 'tracking', rotulo: 'Tracking', Componente: Tracking },
+  { id: 'treinar', rotulo: 'Treinar Sinais', Componente: Treinar },
   { id: 'qualidade', rotulo: 'Qualidade', Componente: Qualidade },
   { id: 'perfis', rotulo: 'Perfis', Componente: Perfis },
   { id: 'recomendacoes', rotulo: 'Recomendações', Componente: Recomendacoes },
