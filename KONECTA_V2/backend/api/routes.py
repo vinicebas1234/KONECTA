@@ -226,7 +226,7 @@ async def obter_trajetoria_analise(id_sessao: str) -> dict:
 
 
 @router.post("/reconhecer")
-async def reconhecer_sinal(landmarks: list) -> dict:
+async def reconhecer_sinal(landmarks: list = Body(...)) -> dict:
     """Reconhece um sinal Libras a partir dos landmarks.
 
     Parâmetros:
