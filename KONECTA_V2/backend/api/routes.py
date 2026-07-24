@@ -19,6 +19,7 @@ from backend.services.pipeline_service import (
     obter_analise_trajetoria,
     processar_sessao_completa,
 )
+from backend.services.recognition_service import service as recognition_service
 from knowledge.ai_assistant import AIResearchAssistant, ProvedorAnthropic
 from knowledge.reports import ReportGenerator
 
@@ -219,3 +220,27 @@ async def obter_trajetoria_analise(id_sessao: str) -> dict:
         return analise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+# === Reconhecimento em Tempo Real ===
+
+
+@router.post("/reconhecer")
+async def reconhecer_sinal(landmarks: list) -> dict:
+    """Reconhece um sinal Libras a partir dos landmarks.
+
+    Parâmetros:
+    - landmarks: Lista de frames com landmarks das mãos
+                 Formato esperado: [[x, y, z, ...], ...]
+                 Onde cada ponto tem 3 coordenadas (x, y, z)
+
+    Retorna:
+    - sinal: Nome do sinal reconhecido
+    - confianca: Probabilidade [0, 1]
+    - modelo: Qual modelo foi usado
+    """
+    try:
+        resultado = await run_in_threadpool(recognition_service.reconhecer, landmarks)
+        return resultado
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Erro ao reconhecer: {str(e)}")

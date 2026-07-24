@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
+import { Hands, VERSION } from '@mediapipe/hands'
+import { Camera } from '@mediapipe/camera_utils'
 
 export default function Reconhecimento() {
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
+  const handsRef = useRef(null)
+  const cameraRef = useRef(null)
+
   const [capturando, setCapturando] = useState(false)
   const [predicoes, setPredicoes] = useState([])
   const [sinaisTreinados, setSinaisTreinados] = useState([])
@@ -13,8 +18,9 @@ export default function Reconhecimento() {
   const [ultimaPredicao, setUltimaPredicao] = useState(null)
   const [acertos, setAcertos] = useState(0)
   const [erros, setErros] = useState(0)
-  const [sinalAtual, setSinalAtual] = useState(null)
-  const [framesSinalAtual, setFramesSinalAtual] = useState(0)
+
+  // Buffer de landmarks para fazer predição (30 frames)
+  const landmarksBufferRef = useRef([])
 
   // Sincronizar sinais treinados
   useEffect(() => {
@@ -36,172 +42,194 @@ export default function Reconhecimento() {
     return () => clearInterval(verificarSinais)
   }, [])
 
-  // Iniciar processamento de frames quando capturando muda para true
+  // Inicializar MediaPipe Hands
   useEffect(() => {
-    if (capturando) {
-      console.log('✓ Iniciando processamento de frames...')
-      processarFrames()
+    const setupHands = async () => {
+      try {
+        const hands = new Hands({
+          locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@${VERSION}/${file}`
+          },
+        })
+
+        hands.setOptions({
+          maxNumHands: 2,
+          modelComplexity: 1,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        })
+
+        // Callback quando MediaPipe detecta landmarks
+        hands.onResults(onHandsResults)
+
+        handsRef.current = hands
+        console.log('✓ MediaPipe Hands inicializado')
+      } catch (erro) {
+        console.error('❌ Erro ao inicializar MediaPipe:', erro)
+      }
     }
-  }, [capturando])
+
+    setupHands()
+
+    return () => {
+      if (handsRef.current) {
+        handsRef.current.close()
+      }
+    }
+  }, [])
+
+  // Callback quando MediaPipe detecta landmarks
+  const onHandsResults = (results) => {
+    if (!capturando) return
+
+    try {
+      const ctx = canvasRef.current?.getContext('2d')
+      if (!ctx) return
+
+      // Desenhar vídeo no canvas
+      const video = videoRef.current
+      if (video && video.readyState === video.HAVE_ENOUGH_DATA) {
+        ctx.drawImage(video, 0, 0, canvasRef.current.width, canvasRef.current.height)
+      }
+
+      // Extrair landmarks das mãos
+      let landmarks = []
+
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        // Pegar landmarks de ambas as mãos (se houver)
+        for (let hand of results.multiHandLandmarks) {
+          for (let landmark of hand) {
+            landmarks.push([landmark.x, landmark.y, landmark.z])
+          }
+        }
+      }
+
+      // Se não detectou mão, usar zeros
+      if (landmarks.length === 0) {
+        landmarks = Array(42).fill([0, 0, 0]) // 21 pontos x 2 mãos x 3 coords
+      }
+
+      // Adicionar ao buffer
+      landmarksBufferRef.current.push(landmarks)
+
+      // Quando tiver 30 frames, fazer predição
+      if (landmarksBufferRef.current.length >= 30) {
+        fazerPredicao(landmarksBufferRef.current.slice(0, 30))
+        landmarksBufferRef.current = [] // Limpar buffer
+      }
+
+      setFrameAtual(prev => prev + 1)
+    } catch (erro) {
+      console.error('Erro ao processar landmarks:', erro)
+    }
+  }
+
+  // Fazer predição via API
+  const fazerPredicao = async (landmarks) => {
+    try {
+      const response = await fetch('http://localhost:8000/api/reconhecer', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(landmarks),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Erro na API: ${response.status}`)
+      }
+
+      const resultado = await response.json()
+      console.log('✓ Reconhecimento:', resultado)
+
+      if (resultado.sinal && resultado.sinal !== 'DESCONHECIDO') {
+        const novaPred = {
+          frame: frameAtual,
+          sinal: resultado.sinal,
+          confianca: resultado.confianca || 0.5,
+          timestamp: new Date().toLocaleTimeString(),
+        }
+
+        setPredicoes(prev => [...prev.slice(-29), novaPred])
+        setUltimaPredicao(novaPred)
+
+        // Atualizar contadores
+        if (novaPred.confianca > 0.65) {
+          setAcertos(prev => prev + 1)
+        } else if (novaPred.confianca < 0.45) {
+          setErros(prev => prev + 1)
+        }
+
+        // Calcular estatísticas
+        setEstatisticas({
+          frameTotal: frameAtual,
+          confiancaMedia: (predicoes.reduce((acc, p) => acc + p.confianca, 0) + novaPred.confianca) / (predicoes.length + 1),
+          sinalMaisFrequente: novaPred.sinal,
+          contagens: { [novaPred.sinal]: predicoes.filter(p => p.sinal === novaPred.sinal).length + 1 },
+        })
+      }
+    } catch (erro) {
+      console.error('❌ Erro ao reconhecer:', erro)
+      setUltimaPredicao({
+        frame: frameAtual,
+        sinal: 'ERRO',
+        confianca: 0,
+        timestamp: new Date().toLocaleTimeString(),
+      })
+    }
+  }
 
   // Iniciar câmera
   async function iniciarCamera() {
-    console.log('📷 Tentando iniciar câmera...')
+    console.log('📷 Iniciando câmera com MediaPipe...')
 
-    // Tenta acessar câmera real
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480 }
+        video: { width: 640, height: 480 },
       })
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream
-        console.log('✓ Câmera iniciada com sucesso')
+      }
+
+      setCapturando(true)
+      setAcertos(0)
+      setErros(0)
+      setPredicoes([])
+      setFrameAtual(0)
+      landmarksBufferRef.current = []
+
+      // Iniciar camera com MediaPipe
+      if (handsRef.current && videoRef.current) {
+        cameraRef.current = new Camera(videoRef.current, {
+          onFrame: async () => {
+            await handsRef.current.send({ image: videoRef.current })
+          },
+          width: 640,
+          height: 480,
+        })
+        cameraRef.current.start()
+        console.log('✓ Camera iniciada com MediaPipe')
       }
     } catch (erro) {
-      console.warn('⚠️ Câmera não disponível - usando simulação', erro.message)
-      // Câmera bloqueada ou não disponível - continua com simulação
+      console.warn('⚠️ Câmera não disponível:', erro.message)
+      // Em caso de erro, continuar mesmo sem câmera (para testes)
+      setCapturando(true)
     }
-
-    // SEMPRE inicia captura, mesmo que câmera falhe
-    setCapturando(true)
-    setAcertos(0)
-    setErros(0)
-    setPredicoes([])
-    setFrameAtual(0)
   }
 
   // Parar câmera
   function pararCamera() {
+    if (cameraRef.current) {
+      cameraRef.current.stop()
+    }
     if (videoRef.current?.srcObject) {
       videoRef.current.srcObject.getTracks().forEach(track => track.stop())
     }
     setCapturando(false)
     setPredicoes([])
     setFrameAtual(0)
-  }
-
-  // Reconhecer baseado em sinais treinados (com "pegajosidade" - mantém o mesmo sinal por vários frames)
-  function reconhecerSinal() {
-    if (!sinaisTreinados || sinaisTreinados.length === 0) {
-      console.warn('❌ Nenhum sinal treinado disponível', sinaisTreinados)
-      return {
-        sinal: 'DESCONHECIDO',
-        confianca: 0,
-      }
-    }
-
-    // A cada 10 frames, muda para um novo sinal (mantém o mesmo por ~2 segundos)
-    const framesAntesDeQuake = 10
-
-    if (framesSinalAtual >= framesAntesDeQuake || sinalAtual === null) {
-      // Tempo de mudar para um novo sinal
-      const indice = Math.floor(Math.random() * sinaisTreinados.length)
-      const sinalEscolhido = sinaisTreinados[indice]
-      setSinalAtual(sinalEscolhido.nome)
-      setFramesSinalAtual(0)
-    } else {
-      // Incrementar contador
-      setFramesSinalAtual(prev => prev + 1)
-    }
-
-    // Variação de confiança (mas mantém o sinal)
-    const ehCorreto = Math.random() < 0.75
-    const confianca = ehCorreto
-      ? 0.70 + Math.random() * 0.25
-      : 0.20 + Math.random() * 0.30
-
-    const resultado = {
-      sinal: sinalAtual || 'DESCONHECIDO',
-      confianca: confianca,
-    }
-
-    return resultado
-  }
-
-  // Processar frames
-  function processarFrames() {
-    if (!capturando) return
-
-    console.log('🔄 processarFrames() chamada, capturando:', capturando)
-
-    const canvas = canvasRef.current
-    const video = videoRef.current
-    const ctx = canvas.getContext('2d')
-
-    if (!video) {
-      console.warn('⚠️ Video ref não inicializado')
-      setTimeout(() => processarFrames(), 33)
-      return
-    }
-
-    console.log(`🎬 Estado do video: readyState=${video.readyState}, HAVE_ENOUGH_DATA=${video.HAVE_ENOUGH_DATA}`)
-
-    if (video.readyState === video.HAVE_ENOUGH_DATA && ctx) {
-      try {
-        // Desenhar video no canvas
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-
-        // Reconhecer baseado em sinais treinados
-        const resultado = reconhecerSinal()
-
-        // Atualizar predicoes
-        const novaPred = {
-          frame: frameAtual,
-          sinal: resultado.sinal,
-          confianca: resultado.confianca,
-          timestamp: new Date().toLocaleTimeString()
-        }
-
-        setPredicoes(prev => [...prev.slice(-29), novaPred])
-        setUltimaPredicao(novaPred)
-        setFrameAtual(prev => prev + 1)
-
-        // Atualizar contadores
-        if (resultado.confianca > 0.65) {
-          setAcertos(prev => prev + 1)
-        } else if (resultado.confianca < 0.45) {
-          setErros(prev => prev + 1)
-        }
-
-        // Calcular estatísticas
-        if (predicoes.length > 0) {
-          const sinalDominante = predicoes.reduce((acc, p) => {
-            acc[p.sinal] = (acc[p.sinal] || 0) + 1
-            return acc
-          }, {})
-          const confiancaMedia = predicoes.reduce((acc, p) => acc + p.confianca, 0) / predicoes.length
-
-          setEstatisticas({
-            frameTotal: frameAtual,
-            confiancaMedia: confiancaMedia,
-            sinalMaisFrequente: Object.entries(sinalDominante).sort((a, b) => b[1] - a[1])[0]?.[0] || 'N/A',
-            contagens: sinalDominante
-          })
-        }
-      } catch (erro) {
-        console.error('Erro ao processar:', erro)
-      }
-    }
-
-    // Próximo frame (~5 FPS para melhor visualização)
-    setTimeout(() => processarFrames(), 200) // ~5 FPS
-  }
-
-  // Simular landmarks
-  function simularLandmarks() {
-    const landmarks = []
-    for (let f = 0; f < 30; f++) {
-      const frame = []
-      for (let p = 0; p < 21; p++) {
-        frame.push([
-          Math.random() * 0.4 + 0.3,
-          Math.random() * 0.4 + 0.3,
-          Math.random() * 0.4 + 0.3
-        ])
-      }
-      landmarks.push(frame)
-    }
-    return landmarks
+    landmarksBufferRef.current = []
   }
 
   return (
@@ -232,7 +260,7 @@ export default function Reconhecimento() {
                     🔴 AO VIVO — Frame {frameAtual}
                   </div>
                   <div className="bg-black/60 text-white text-xs px-2 py-1 rounded">
-                    ~30 fps
+                    MediaPipe
                   </div>
                 </div>
 
@@ -267,8 +295,7 @@ export default function Reconhecimento() {
                           ? '✅ CORRETO!'
                           : ultimaPredicao.confianca > 0.45
                           ? '⚠️ INCERTO'
-                          : '❌ ERRADO'
-                        }
+                          : '❌ ERRADO'}
                       </p>
                       <p className="text-xs">
                         Acertos: {acertos} | Erros: {erros}
@@ -282,7 +309,7 @@ export default function Reconhecimento() {
                       transition={{ repeat: Infinity, duration: 1 }}
                       className="bg-black/80 text-white text-2xl font-bold p-6 rounded-lg"
                     >
-                      🔄 Processando...
+                      🔄 Aguardando landmarks...
                     </motion.div>
                   </div>
                 )}
@@ -334,7 +361,7 @@ export default function Reconhecimento() {
                 </div>
 
                 <div>
-                  <p className="text-muted">Sinal dominante</p>
+                  <p className="text-muted">Sinal atual</p>
                   <p className="text-xl font-bold text-ink">
                     {estatisticas.sinalMaisFrequente}
                   </p>
@@ -417,7 +444,7 @@ export default function Reconhecimento() {
           <li>Abra "Treinar Sinais" e ensine um gesto (ex: A, B, 👍)</li>
           <li>Volte aqui para "Reconhecimento"</li>
           <li>Clique em "📹 Abrir Câmera"</li>
-          <li>Faça o gesto que aprendeu</li>
+          <li>Faça o gesto que aprendeu (30 frames = ~1-2 segundos)</li>
           <li>Veja o resultado em GRANDE no vídeo:
             <ul className="ml-4 mt-1 space-y-1">
               <li>🟢 <strong>Verde</strong> = Correto (confiança &gt;65%)</li>
