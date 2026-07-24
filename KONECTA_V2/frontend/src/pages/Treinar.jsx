@@ -12,6 +12,18 @@ export default function Treinar() {
   const [statusTreino, setStatusTreino] = useState('')
   const [modeloTreinado, setModeloTreinado] = useState(false)
 
+  // Carregar sinais já treinados
+  useEffect(() => {
+    try {
+      const sinaisArmazenados = localStorage.getItem('sinaisTreinados')
+      if (sinaisArmazenados) {
+        setSinaisTreinados(JSON.parse(sinaisArmazenados))
+      }
+    } catch (e) {
+      console.error('Erro ao carregar sinais:', e)
+    }
+  }, [])
+
   // Iniciar câmera para captura
   async function iniciarCaptura() {
     try {
@@ -101,11 +113,22 @@ export default function Treinar() {
         setModeloTreinado(true)
 
         // Adicionar à lista de sinais treinados
-        setSinaisTreinados(prev => [...prev, {
+        const novoSinalObj = {
           nome: novoSinal,
           amostras: amostrasCapturadas,
-          acuracia: resultado.acuracia
-        }])
+          acuracia: resultado.acuracia,
+          dataTreino: new Date().toLocaleString('pt-BR')
+        }
+
+        const sinaisAtualizados = [...sinaisTreinados, novoSinalObj]
+        setSinaisTreinados(sinaisAtualizados)
+
+        // Sincronizar com localStorage para Reconhecimento ver
+        try {
+          localStorage.setItem('sinaisTreinados', JSON.stringify(sinaisAtualizados))
+        } catch (e) {
+          console.error('Erro ao salvar sinais:', e)
+        }
 
         // Resetar
         setNovoSinal('')
@@ -171,14 +194,16 @@ export default function Treinar() {
 
           {/* Entrada de Nome do Sinal */}
           <div className="space-y-2">
-            <label className="text-sm font-medium text-ink">Nome do Sinal</label>
+            <label className="text-sm font-medium text-ink">O que Deseja Ensinar?</label>
+            <p className="text-xs text-muted">Digite qualquer coisa: A, B, 1, 2, @, etc.</p>
             <input
               type="text"
               value={novoSinal}
               onChange={(e) => setNovoSinal(e.target.value.toUpperCase())}
-              placeholder="Ex: CASA, MESA, PORTA"
+              placeholder="Ex: A, B, C, 1, 2, GATO, @"
               disabled={capturando}
-              className="w-full bg-surface border border-white/10 rounded-lg px-4 py-2 text-sm text-ink placeholder-muted focus:outline-none focus:border-serie"
+              maxLength={20}
+              className="w-full bg-surface border border-white/10 rounded-lg px-4 py-2 text-sm text-ink placeholder-muted focus:outline-none focus:border-serie text-center text-2xl font-bold"
             />
           </div>
 

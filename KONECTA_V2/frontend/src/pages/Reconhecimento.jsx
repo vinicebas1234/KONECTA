@@ -6,9 +6,30 @@ export default function Reconhecimento() {
   const canvasRef = useRef(null)
   const [capturando, setCapturando] = useState(false)
   const [predicoes, setPredicoes] = useState([])
-  const [sinais, setSinais] = useState([])
+  const [sinaisTreinados, setSinaisTreinados] = useState([])
   const [estatisticas, setEstatisticas] = useState(null)
   const [frameAtual, setFrameAtual] = useState(0)
+  const [sinaiDisponivel, setSinaisDisponivel] = useState('Nenhum sinal treinado ainda')
+
+  // Sincronizar sinais treinados
+  useEffect(() => {
+    const verificarSinais = setInterval(() => {
+      try {
+        const sinaisArmazenados = localStorage.getItem('sinaisTreinados')
+        if (sinaisArmazenados) {
+          const sinais = JSON.parse(sinaisArmazenados)
+          setSinaisTreinados(sinais)
+          if (sinais.length > 0) {
+            setSinaisDisponivel(sinais.map(s => s.nome).join(' • '))
+          }
+        }
+      } catch (e) {
+        console.error('Erro ao sincronizar sinais:', e)
+      }
+    }, 500)
+
+    return () => clearInterval(verificarSinais)
+  }, [])
 
   // Iniciar câmera
   async function iniciarCamera() {
@@ -261,14 +282,36 @@ export default function Reconhecimento() {
         </div>
       )}
 
+      {/* Sinais Disponíveis */}
+      {sinaisTreinados.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-good/10 border border-good/30 rounded-lg p-4"
+        >
+          <p className="text-sm font-semibold text-good mb-2">✓ Sinais Disponíveis para Teste</p>
+          <div className="flex flex-wrap gap-2">
+            {sinaisTreinados.map((sinal, idx) => (
+              <div
+                key={idx}
+                className="bg-good/20 text-good px-3 py-1 rounded-full text-sm font-medium"
+              >
+                {sinal.nome} ({(sinal.acuracia * 100).toFixed(0)}%)
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      )}
+
       {/* Info */}
       <div className="bg-info/10 border border-info/30 rounded-lg p-4 text-sm text-ink2 space-y-2">
         <p>💡 <strong>Como usar:</strong></p>
         <ol className="list-decimal list-inside space-y-1 ml-1">
+          <li>Abra "Treinar Sinais" e ensine algo novo (A, B, C, etc)</li>
+          <li>Volte aqui para "Reconhecimento"</li>
           <li>Clique em "📹 Abrir Câmera"</li>
-          <li>Posicione sua mão dentro do quadro</li>
-          <li>Faça o gesto do sinal (CASA, MESA, PORTA)</li>
-          <li>Veja o reconhecimento em tempo real</li>
+          <li>Faça o gesto que aprendeu</li>
+          <li>Sistema reconhece automaticamente!</li>
         </ol>
         <p className="pt-2 border-t border-info/30">
           ⚠️ <strong>Nota:</strong> O reconhecimento usa dados aleatórios simulados.
