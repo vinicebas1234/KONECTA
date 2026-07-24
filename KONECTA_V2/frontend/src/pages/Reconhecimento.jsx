@@ -18,9 +18,30 @@ export default function Reconhecimento() {
   const [ultimaPredicao, setUltimaPredicao] = useState(null)
   const [acertos, setAcertos] = useState(0)
   const [erros, setErros] = useState(0)
+  const [dispositivos, setDispositivos] = useState([])
+  const [cameraEscolhida, setCameraEscolhida] = useState(null)
 
   // Buffer de landmarks para fazer predição (30 frames)
   const landmarksBufferRef = useRef([])
+
+  // Listar dispositivos de câmera disponíveis
+  useEffect(() => {
+    const listarDispositivos = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices()
+        const cameras = devices.filter(device => device.kind === 'videoinput')
+        setDispositivos(cameras)
+        console.log(`📹 ${cameras.length} câmera(s) encontrada(s):`, cameras)
+        if (cameras.length > 0) {
+          setCameraEscolhida(cameras[0].deviceId)
+        }
+      } catch (erro) {
+        console.error('❌ Erro ao listar câmeras:', erro)
+      }
+    }
+
+    listarDispositivos()
+  }, [])
 
   // Sincronizar sinais treinados
   useEffect(() => {
@@ -97,6 +118,49 @@ export default function Reconhecimento() {
 
       if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
         console.log(`✓ Detectadas ${results.multiHandLandmarks.length} mão(s)`)
+
+        // Desenhar landmarks
+        for (let hand of results.multiHandLandmarks) {
+          // Desenhar pontos
+          for (let i = 0; i < hand.length; i++) {
+            const point = hand[i]
+            const x = point.x * canvasRef.current.width
+            const y = point.y * canvasRef.current.height
+
+            // Desenhar círculo
+            ctx.fillStyle = '#00FF00'
+            ctx.beginPath()
+            ctx.arc(x, y, 5, 0, 2 * Math.PI)
+            ctx.fill()
+
+            // Desenhar número do ponto
+            ctx.fillStyle = '#FFFFFF'
+            ctx.font = 'bold 10px Arial'
+            ctx.fillText(i, x + 7, y - 7)
+          }
+
+          // Desenhar conexões (skeleton)
+          const connections = [
+            [0, 1], [1, 2], [2, 3], [3, 4],           // Polegar
+            [5, 6], [6, 7], [7, 8],                   // Índice
+            [9, 10], [10, 11], [11, 12],              // Meio
+            [13, 14], [14, 15], [15, 16],             // Anelar
+            [17, 18], [18, 19], [19, 20],             // Mínimo
+            [0, 5], [5, 9], [9, 13], [13, 17], [17, 0] // Palma
+          ]
+
+          ctx.strokeStyle = '#00FF00'
+          ctx.lineWidth = 2
+          for (let [start, end] of connections) {
+            const p1 = hand[start]
+            const p2 = hand[end]
+            ctx.beginPath()
+            ctx.moveTo(p1.x * canvasRef.current.width, p1.y * canvasRef.current.height)
+            ctx.lineTo(p2.x * canvasRef.current.width, p2.y * canvasRef.current.height)
+            ctx.stroke()
+          }
+        }
+
         // Pegar landmarks de ambas as mãos (se houver)
         for (let hand of results.multiHandLandmarks) {
           for (let landmark of hand) {
@@ -185,11 +249,20 @@ export default function Reconhecimento() {
 
   // Iniciar câmera
   async function iniciarCamera() {
-    console.log('📷 Iniciando câmera com MediaPipe...')
+    console.log(`📷 Iniciando câmera (${cameraEscolhida}) com MediaPipe...`)
 
     try {
+      const videoConstraints = {
+        width: 640,
+        height: 480,
+      }
+
+      if (cameraEscolhida) {
+        videoConstraints.deviceId = { exact: cameraEscolhida }
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480 },
+        video: videoConstraints,
       })
 
       if (videoRef.current) {
@@ -217,8 +290,58 @@ export default function Reconhecimento() {
       }
     } catch (erro) {
       console.warn('⚠️ Câmera não disponível:', erro.message)
-      // Em caso de erro, continuar mesmo sem câmera (para testes)
+      console.log('📊 Iniciando modo TESTE com dados simulados...')
+
       setCapturando(true)
+      setAcertos(0)
+      setErros(0)
+      setPredicoes([])
+      setFrameAtual(0)
+      landmarksBufferRef.current = []
+
+      // Modo teste: simular detecção de mão
+      let simulatedHandIndex = 0
+      const simulateFrames = () => {
+        // Gerar landmarks realistas simulando uma mão (21 pontos x 2 mãos)
+        const landmark = []
+
+        // Primeira mão (pontos 0-20)
+        for (let i = 0; i < 21; i++) {
+          // Simular posição realista de mão (0.2 a 0.8)
+          const baseX = 0.4 + Math.sin(i / 21 * Math.PI) * 0.2
+          const baseY = 0.5 + Math.cos(i / 21 * Math.PI) * 0.2
+          const noise = () => (Math.random() - 0.5) * 0.1
+
+          landmark.push(baseX + noise()) // x
+          landmark.push(baseY + noise()) // y
+          landmark.push(0.5 + noise())    // z
+        }
+
+        // Segunda mão (pontos 21-41) - posição diferente
+        for (let i = 0; i < 21; i++) {
+          const baseX = 0.6 + Math.sin(i / 21 * Math.PI) * 0.2
+          const baseY = 0.5 + Math.cos(i / 21 * Math.PI) * 0.2
+          const noise = () => (Math.random() - 0.5) * 0.1
+
+          landmark.push(baseX + noise()) // x
+          landmark.push(baseY + noise()) // y
+          landmark.push(0.5 + noise())    // z
+        }
+
+        landmarksBufferRef.current.push(landmark)
+        setFrameAtual(prev => prev + 1)
+
+        if (landmarksBufferRef.current.length >= 30) {
+          console.log('📊 30 frames simulados com padrão realista, enviando para API...')
+          fazerPredicao(landmarksBufferRef.current.slice(0, 30))
+          landmarksBufferRef.current = []
+        }
+      }
+
+      // Simular frames a cada 50ms (20 FPS)
+      const intervalId = setInterval(simulateFrames, 50)
+      cameraRef.current = { stop: () => clearInterval(intervalId) }
+      console.log('✓ Modo TESTE iniciado (dados simulados)')
     }
   }
 
@@ -320,6 +443,24 @@ export default function Reconhecimento() {
               </div>
             )}
           </div>
+
+          {/* Seleção de Câmera */}
+          {dispositivos.length > 0 && !capturando && (
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-ink2">📹 Câmera</label>
+              <select
+                value={cameraEscolhida || ''}
+                onChange={(e) => setCameraEscolhida(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-surface border border-white/20 text-ink text-sm"
+              >
+                {dispositivos.map((device) => (
+                  <option key={device.deviceId} value={device.deviceId}>
+                    {device.label || `Câmera ${dispositivos.indexOf(device) + 1}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Controles */}
           <div className="flex gap-2">

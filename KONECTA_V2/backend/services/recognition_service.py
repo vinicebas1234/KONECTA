@@ -49,8 +49,12 @@ class RecognitionService:
                 with open(norm_path, "rb") as f:
                     norm_data = pickle.load(f)
                     if isinstance(norm_data, dict):
-                        self.norm_media = norm_data.get("media")
-                        self.norm_std = norm_data.get("std")
+                        self.norm_media = np.array(norm_data.get("media"), dtype=np.float32)
+                        self.norm_std = np.array(norm_data.get("std"), dtype=np.float32)
+                    elif isinstance(norm_data, np.ndarray):
+                        # Se é um array, usar como média
+                        self.norm_media = np.array(norm_data, dtype=np.float32)
+                        self.norm_std = np.ones(len(norm_data), dtype=np.float32)
                     print(f"✓ Normalização carregada: {norm_path}")
 
         except Exception as e:
@@ -93,7 +97,9 @@ class RecognitionService:
             # Normalizar se possível
             if self.norm_media is not None and self.norm_std is not None:
                 try:
-                    features = (features - self.norm_media) / (self.norm_std + 1e-8)
+                    norm_media = np.array(self.norm_media, dtype=np.float32)
+                    norm_std = np.array(self.norm_std, dtype=np.float32)
+                    features = (features - norm_media) / (norm_std + 1e-8)
                 except Exception as e:
                     print(f"⚠️ Erro ao normalizar: {e}")
 

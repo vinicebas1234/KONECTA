@@ -8,3 +8,13 @@ Port 5173 is in use, trying another one...
 
   ➜  Local:   http://localhost:5174/
   ➜  Network: use --host to expose
+22:45:11 [vite] (client) hmr update /@fs/C:\KONECTA\KONECTA_V2\frontend\src\pages\Reconhecimento.jsx, /src/index.css
+
+> konecta-v2-frontend@0.1.0 dev
+> vite
+
+
+  VITE v6.4.3  ready in 930 ms
+
+  ➜  Local:   http://localhost:5173/
+  ➜  Network: use --host to expose

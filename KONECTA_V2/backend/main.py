@@ -21,10 +21,15 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# Em desenvolvimento o frontend (Vite, porta 5173) acessa via proxy ou direto.
+# Em desenvolvimento o frontend (Vite) acessa via proxy ou direto
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
