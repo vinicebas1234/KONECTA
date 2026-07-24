@@ -1,58 +1,57 @@
-"""Serviço de reconhecimento em tempo real usando Random Forest."""
+"""Serviço de reconhecimento em tempo real usando modelo estático Random Forest."""
 
 import pickle
 from pathlib import Path
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 
-# Caminho dos modelos
-MODELS_PATH = Path(__file__).parent.parent.parent / "OCR" / "modelos"
+# Caminho dos modelos (OCR/modelos está um nível acima de KONECTA_V2)
+MODELS_PATH = Path(__file__).parent.parent.parent.parent / "OCR" / "modelos"
+
+# Configurações (iguais ao V1)
+TOTAL_FEATURES = 126  # 21 pontos x 2 mãos x 3 coords (x,y,z)
 
 class RecognitionService:
-    """Serviço de reconhecimento de gestos Libras."""
+    """Serviço de reconhecimento de gestos Libras usando modelo estático RF."""
 
     def __init__(self):
-        """Inicializa o serviço carregando os modelos."""
-        self.modelo_dinamico = None
-        self.encoder_dinamico = None
+        """Inicializa carregando os modelos."""
         self.modelo_estatico = None
         self.encoder_estatico = None
+        self.norm_media = None
+        self.norm_std = None
         self._load_models()
 
     def _load_models(self):
-        """Carrega os modelos Random Forest."""
+        """Carrega o modelo estático Random Forest (que funciona bem)."""
         try:
-            # Carregar modelo dinâmico
-            modelo_path = MODELS_PATH / "modelo_dinamico_rf.pkl"
-            encoder_path = MODELS_PATH / "encoder_dinamico_rf.pkl"
+            # Carregar modelo estático
+            modelo_path = MODELS_PATH / "modelo_estatico.pkl"
+            encoder_path = MODELS_PATH / "encoder_estatico.pkl"
+            norm_path = MODELS_PATH / "variancia_pooled_estatica.pkl"
 
             if modelo_path.exists():
                 with open(modelo_path, "rb") as f:
-                    self.modelo_dinamico = pickle.load(f)
-                print(f"✓ Modelo dinâmico carregado: {modelo_path}")
+                    self.modelo_estatico = pickle.load(f)
+                print(f"✓ Modelo estático RF carregado: {modelo_path}")
             else:
-                print(f"⚠️ Modelo dinâmico não encontrado: {modelo_path}")
+                print(f"❌ Modelo estático não encontrado: {modelo_path}")
+                return
 
             if encoder_path.exists():
                 with open(encoder_path, "rb") as f:
-                    self.encoder_dinamico = pickle.load(f)
-                print(f"✓ Encoder dinâmico carregado: {encoder_path}")
-            else:
-                print(f"⚠️ Encoder dinâmico não encontrado: {encoder_path}")
-
-            # Carregar modelo estático como fallback
-            modelo_est_path = MODELS_PATH / "modelo_estatico.pkl"
-            encoder_est_path = MODELS_PATH / "encoder_estatico.pkl"
-
-            if modelo_est_path.exists():
-                with open(modelo_est_path, "rb") as f:
-                    self.modelo_estatico = pickle.load(f)
-                print(f"✓ Modelo estático carregado: {modelo_est_path}")
-
-            if encoder_est_path.exists():
-                with open(encoder_est_path, "rb") as f:
                     self.encoder_estatico = pickle.load(f)
-                print(f"✓ Encoder estático carregado: {encoder_est_path}")
+                print(f"✓ Encoder estático carregado: {encoder_path}")
+            else:
+                print(f"⚠️ Encoder estático não encontrado: {encoder_path}")
+
+            # Carregar normalização
+            if norm_path.exists():
+                with open(norm_path, "rb") as f:
+                    norm_data = pickle.load(f)
+                    if isinstance(norm_data, dict):
+                        self.norm_media = norm_data.get("media")
+                        self.norm_std = norm_data.get("std")
+                    print(f"✓ Normalização carregada: {norm_path}")
 
         except Exception as e:
             print(f"❌ Erro ao carregar modelos: {e}")
@@ -62,94 +61,98 @@ class RecognitionService:
 
         Args:
             landmarks: Lista de frames, cada frame tem 21 pontos x 2 mãos x 3 coords
-                      Shape esperado: (30, 42, 3) ou similar
+                      Shape esperado: (30, 42, 3) ou lista com ~1260 valores
 
         Returns:
             {
                 "sinal": str - Nome do sinal reconhecido
                 "confianca": float - Probabilidade [0, 1]
-                "modelo": str - Qual modelo foi usado
             }
         """
-        if not self.modelo_dinamico:
+        if self.modelo_estatico is None or self.encoder_estatico is None:
             return {
                 "sinal": "DESCONHECIDO",
                 "confianca": 0.0,
-                "modelo": "nenhum",
-                "erro": "Modelos não carregados",
+                "erro": "Modelo não carregado",
             }
 
         try:
-            # Converter landmarks para array numpy
+            # Converter para array
             landmarks_array = np.array(landmarks, dtype=np.float32)
 
-            # Extrair features (placeholder - em produção usaria os verdadeiros features)
-            # Por enquanto, vamos apenas normalizar os landmarks
+            # Extrair features (média dos frames para modelo estático)
             features = self._extrair_features(landmarks_array)
 
-            if features is None:
+            if features is None or len(features) != TOTAL_FEATURES:
                 return {
                     "sinal": "DESCONHECIDO",
                     "confianca": 0.0,
-                    "modelo": "dinamico",
-                    "erro": "Falha ao extrair features",
+                    "erro": f"Features inválidas: esperado {TOTAL_FEATURES}, obteve {len(features) if features is not None else 0}",
                 }
 
-            # Normalizar com o encoder
-            if self.encoder_dinamico:
+            # Normalizar se possível
+            if self.norm_media is not None and self.norm_std is not None:
                 try:
-                    features_normalized = self.encoder_dinamico.transform(
-                        features.reshape(1, -1)
-                    )
-                except Exception:
-                    features_normalized = features.reshape(1, -1)
-            else:
-                features_normalized = features.reshape(1, -1)
+                    features = (features - self.norm_media) / (self.norm_std + 1e-8)
+                except Exception as e:
+                    print(f"⚠️ Erro ao normalizar: {e}")
 
             # Fazer predição
-            predicoes = self.modelo_dinamico.predict(features_normalized)
-            probabilidades = self.modelo_dinamico.predict_proba(features_normalized)
+            x = features.reshape(1, -1)
+            predicao = self.modelo_estatico.predict(x)
+            probabilidades = self.modelo_estatico.predict_proba(x)
 
-            if len(predicoes) > 0:
-                sinal = predicoes[0]
-                # Pegar a confiança máxima
+            if len(predicao) > 0:
+                sinal = predicao[0]
                 confianca = float(np.max(probabilidades[0]))
 
                 return {
                     "sinal": str(sinal),
                     "confianca": confianca,
-                    "modelo": "dinamico",
                 }
 
             return {
                 "sinal": "DESCONHECIDO",
                 "confianca": 0.0,
-                "modelo": "dinamico",
             }
 
         except Exception as e:
+            print(f"❌ Erro ao reconhecer: {e}")
             return {
                 "sinal": "DESCONHECIDO",
                 "confianca": 0.0,
-                "modelo": "dinamico",
                 "erro": str(e),
             }
 
     def _extrair_features(self, landmarks: np.ndarray) -> np.ndarray | None:
-        """Extrai features dos landmarks.
+        """Extrai features dos landmarks (média dos frames).
 
-        Placeholder: em produção usaria os verdadeiros cálculos de features
-        (velocidade, amplitude, etc.) como definidos no projeto.
+        Tira a média de todos os frames para usar como features estáticas.
+        Isso é similar ao que V1 faz para o modelo estático.
         """
         try:
-            # Flatten dos landmarks
-            if landmarks.ndim == 3:
-                # (30, 21, 3) ou (frames, pontos, coords)
-                features = landmarks.flatten()
-            else:
-                features = landmarks
+            if landmarks.size == 0:
+                return np.zeros(TOTAL_FEATURES, dtype=np.float32)
 
-            return features
+            # Se é um array 3D (frames, pontos, coords), flatten e tira média
+            if landmarks.ndim == 3:
+                # Shape: (frames, 21, 3) ou (frames, 42, 3)
+                landmarks = landmarks.reshape(landmarks.shape[0], -1)  # (frames, features)
+                features = np.mean(landmarks, axis=0)  # Média entre frames
+            else:
+                # Se já é 1D ou 2D, apenas usar como está
+                features = landmarks.flatten()
+
+            # Garantir que temos exatamente 126 features
+            if len(features) < TOTAL_FEATURES:
+                # Pad com zeros
+                features = np.pad(features, (0, TOTAL_FEATURES - len(features)))
+            elif len(features) > TOTAL_FEATURES:
+                # Truncar
+                features = features[:TOTAL_FEATURES]
+
+            return features.astype(np.float32)
+
         except Exception as e:
             print(f"❌ Erro ao extrair features: {e}")
             return None

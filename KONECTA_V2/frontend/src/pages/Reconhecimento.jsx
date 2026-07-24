@@ -96,12 +96,15 @@ export default function Reconhecimento() {
       let landmarks = []
 
       if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        console.log(`✓ Detectadas ${results.multiHandLandmarks.length} mão(s)`)
         // Pegar landmarks de ambas as mãos (se houver)
         for (let hand of results.multiHandLandmarks) {
           for (let landmark of hand) {
             landmarks.push([landmark.x, landmark.y, landmark.z])
           }
         }
+      } else {
+        console.log('⚠️ Nenhuma mão detectada neste frame')
       }
 
       // Se não detectou mão, usar zeros
@@ -114,6 +117,7 @@ export default function Reconhecimento() {
 
       // Quando tiver 30 frames, fazer predição
       if (landmarksBufferRef.current.length >= 30) {
+        console.log('📊 30 frames coletados, enviando para API...')
         fazerPredicao(landmarksBufferRef.current.slice(0, 30))
         landmarksBufferRef.current = [] // Limpar buffer
       }
