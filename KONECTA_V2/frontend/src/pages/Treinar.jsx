@@ -253,7 +253,7 @@ export default function Treinar() {
               ref={canvasRef}
               width={640}
               height={480}
-              className="hidden"
+              className="absolute inset-0 w-full h-full"
             />
 
             {capturando && (
