@@ -1,0 +1,23 @@
+# Configuracao do Knowledge Engine
+# Consumida por quality_analyzer, recommendations e ai_assistant.
+
+qualidade:
+  duracao_minima_s: 0.3
+  duracao_maxima_s: 10.0
+  confianca_minima: 0.5
+  taxa_maxima_landmarks_perdidos: 0.3
+  n_frames_minimo: 5
+
+recomendacoes:
+  min_amostras_por_sinal: 10
+  min_sinalizantes_por_sinal: 2
+  min_sinalizantes_dataset: 5
+  balanceamento_minimo: 0.85
+
+similaridade:
+  limiar_relacao: 0.9
+
+ai_assistant:
+  provedor: anthropic          # anthropic | openai | local (openai/local pendentes)
+  modelo: claude-opus-4-8
+  max_tokens: 16000

@@ -8,10 +8,9 @@
 
 Melhorias aplicadas:
 - Detecção robusta de TensorFlow (múltiplas tentativas + instalação automática)
-- MediaPipe Holistic: captura completa de mãos (126) + pose corporal (99) + rosto (1404) = 1629 features
-- Normalização independente por região (mãos → pulso, pose → quadril/ombros, rosto → nariz/bochechas)
+- Download automático de hand_landmarker.task com progresso e validação
 - Arquitetura LSTM dinâmica aprimorada (3 camadas BiLSTM + BatchNorm)
-- Data augmentation para sequências dinâmicas (espelhamento, rotação, variação temporal)
+- Data augmentation para sequências dinâmicas
 - Feedback visual de treino (progresso, métricas por época, ETA e gráfico)
 - Validações, normalização aprimorada, logs detalhados e modo debug
 """
@@ -20,14 +19,20 @@ Melhorias aplicadas:
 # IMPORTAÇÕES
 # ══════════════════════════════════════════════════════════════════════════════
 
+import csv
+import hashlib
 import importlib
 import os
 import pickle
+import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
+import urllib.error
+import urllib.request
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -41,16 +46,12 @@ from tkinter import ttk, messagebox, scrolledtext
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
-from sklearn.model_selection import train_test_split
-from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import train_test_split, GroupShuffleSplit
 from sklearn.preprocessing import LabelEncoder
 
-try:
-    from dtaidistance import dtw
-    DTW_DISPONIVEL = True
-except ImportError:
-    DTW_DISPONIVEL = False
-
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+from mediapipe.framework.formats import landmark_pb2
 
 try:
     import matplotlib
@@ -76,6 +77,7 @@ for d in (DIR_DADOS, DIR_ESTATICOS, DIR_DINAMICOS, DIR_MODELOS):
     d.mkdir(parents=True, exist_ok=True)
 
 # MediaPipe
+MP_MAX_HANDS = 2
 MP_DET_CONF = 0.7
 MP_TRK_CONF = 0.5
 
@@ -88,15 +90,22 @@ CAM_INDEX = 0
 CAM_WIDTH = 640
 CAM_HEIGHT = 480
 
-# Features — MediaPipe Holistic otimizado para LIBRAS (mãos + pose apenas)
-# Rosto é custoso demais (1404 features) com pouco valor discriminativo para sinais
-FEATURES_MAO      = 21 * 3    # 63 por mão (x,y,z × 21 landmarks)
-FEATURES_MAOS     = FEATURES_MAO * 2  # 126 (mão direita + esquerda)
-FEATURES_POSE     = 33 * 3    # 99  (x,y,z × 33 landmarks de pose)
-TOTAL_FEATURES    = FEATURES_MAOS + FEATURES_POSE  # 225 — otimizado para velocidade e escala
+# Features
+FEATURES_PER_HAND = 21 * 3  # 63
+TOTAL_FEATURES = FEATURES_PER_HAND * MP_MAX_HANDS  # 126
 
-# Índices de início de cada bloco
-IDX_POSE_START = FEATURES_MAOS  # 126
+# Sinalizante (Fase 0 do LSAE — split honesto de avaliação por pessoa)
+SIGNER_DESCONHECIDO = "desconhecido"
+VLIBRASIL_LOG_GLOB = "vlibrasil_converter_*.csv"
+
+# Hand Landmarker
+HAND_LANDMARKER_URL = (
+    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
+    "hand_landmarker/float16/1/hand_landmarker.task"
+)
+HAND_LANDMARKER_FILE = DIR_MODELOS / "hand_landmarker.task"
+HAND_LANDMARKER_MIN_BYTES = 1_000_000
+DOWNLOAD_CHUNK_SIZE = 256 * 1024
 
 # Tema (Catppuccin Mocha)
 COR_BG = "#1e1e2e"
@@ -206,146 +215,208 @@ def _safe_log(log_fn, msg):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DETECTOR HOLISTIC (MediaPipe) — mãos + pose + rosto
+# HAND LANDMARKER: DOWNLOAD + VALIDAÇÃO
 # ══════════════════════════════════════════════════════════════════════════════
 
-class DetectorHolistic:
-    """Captura completa via MediaPipe Holistic: mãos (126) + pose (99) + rosto (1404) = 1629 features."""
+def validar_hand_landmarker(path_task):
+    """Valida se o arquivo existe, tamanho mínimo e se abre no MediaPipe."""
+    path_task = Path(path_task)
 
-    def __init__(self, debug=False, log_fn=None):
+    if not path_task.exists():
+        return False, "Arquivo não existe"
+
+    tamanho = path_task.stat().st_size
+    if tamanho < HAND_LANDMARKER_MIN_BYTES:
+        return False, f"Arquivo muito pequeno ({tamanho} bytes)"
+
+    try:
+        base_options = python.BaseOptions(model_asset_path=str(path_task))
+        options = vision.HandLandmarkerOptions(base_options=base_options, num_hands=1)
+        tester = vision.HandLandmarker.create_from_options(options)
+        tester.close()
+        return True, f"OK ({tamanho} bytes)"
+    except Exception as exc:
+        return False, f"Falha ao abrir modelo no MediaPipe: {exc}"
+
+
+def baixar_hand_landmarker(path_task, progress_cb=None, log_fn=None):
+    """Baixa o hand_landmarker.task com barra de progresso e hash SHA256."""
+    path_task = Path(path_task)
+    path_task.parent.mkdir(parents=True, exist_ok=True)
+
+    _safe_log(log_fn, "⬇ Iniciando download do hand_landmarker.task...")
+
+    req = urllib.request.Request(HAND_LANDMARKER_URL, headers={"User-Agent": "Mozilla/5.0"})
+    sha = hashlib.sha256()
+
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix="hand_landmarker_", suffix=".part", dir=str(path_task.parent))
+    os.close(tmp_fd)
+
+    baixados = 0
+    total = 0
+    t0 = time.time()
+
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp, open(tmp_path, "wb") as out:
+            content_length = resp.headers.get("Content-Length")
+            total = int(content_length) if content_length and content_length.isdigit() else 0
+
+            while True:
+                chunk = resp.read(DOWNLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                out.write(chunk)
+                sha.update(chunk)
+                baixados += len(chunk)
+
+                if progress_cb:
+                    elapsed = max(time.time() - t0, 1e-6)
+                    velocidade = baixados / elapsed
+                    pct = (baixados / total * 100.0) if total > 0 else 0.0
+                    progress_cb(baixados, total, pct, velocidade)
+
+        os.replace(tmp_path, path_task)
+    except urllib.error.URLError as exc:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise RuntimeError(f"Erro de rede ao baixar hand_landmarker.task: {exc}")
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+    digest = sha.hexdigest()
+    _safe_log(log_fn, f"🔐 SHA256 do arquivo baixado: {digest}")
+
+    ok, detalhe = validar_hand_landmarker(path_task)
+    if not ok:
+        try:
+            path_task.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise RuntimeError(f"Arquivo baixado inválido: {detalhe}")
+
+    _safe_log(log_fn, f"✅ hand_landmarker.task pronto ({detalhe})")
+    return {"bytes": baixados, "total": total, "sha256": digest}
+
+
+def garantir_hand_landmarker(path_task, progress_cb=None, log_fn=None):
+    """Garante que o modelo existe; baixa automaticamente se necessário."""
+    ok, detalhe = validar_hand_landmarker(path_task)
+    if ok:
+        _safe_log(log_fn, f"✅ Modelo hand_landmarker já disponível ({detalhe})")
+        return "ok"
+
+    _safe_log(log_fn, f"⚠ Modelo ausente/inválido: {detalhe}")
+    baixar_hand_landmarker(path_task, progress_cb=progress_cb, log_fn=log_fn)
+    return "baixado"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DETECTOR DE MÃOS (MediaPipe)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class DetectorMaos:
+    """Detector de mãos e extrator de features (landmarks normalizados)."""
+
+    def __init__(self, model_path=None, debug=False, log_fn=None):
         self.debug = bool(debug)
         self.log_fn = log_fn
+        self.model_path = str(model_path or HAND_LANDMARKER_FILE)
 
-        self.holistic = mp.solutions.holistic.Holistic(
-            static_image_mode=False,
-            model_complexity=1,        # 0=leve, 1=médio, 2=pesado
-            smooth_landmarks=True,
-            enable_segmentation=False,
-            min_detection_confidence=MP_DET_CONF,
+        if not os.path.exists(self.model_path):
+            raise FileNotFoundError(
+                f"Modelo não encontrado: {self.model_path}. "
+                f"Faça download para {DIR_MODELOS}"
+            )
+
+        base_options = python.BaseOptions(model_asset_path=self.model_path)
+        options = vision.HandLandmarkerOptions(
+            base_options=base_options,
+            num_hands=MP_MAX_HANDS,
+            min_hand_detection_confidence=MP_DET_CONF,
             min_tracking_confidence=MP_TRK_CONF,
         )
 
-        self.mp_draw  = mp.solutions.drawing_utils
+        self.detector = vision.HandLandmarker.create_from_options(options)
+
+        self.mp_draw = mp.solutions.drawing_utils
         self.mp_style = mp.solutions.drawing_styles
-        self.mp_hol   = mp.solutions.holistic
+        self.mp_connections = mp.solutions.hands.HAND_CONNECTIONS
 
     def _debug(self, msg):
         if self.debug:
-            _safe_log(self.log_fn, f"[DEBUG Holistic] {msg}")
+            _safe_log(self.log_fn, f"[DEBUG Detector] {msg}")
 
     def processar(self, frame_bgr):
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        frame_rgb.flags.writeable = False
-        result = self.holistic.process(frame_rgb)
-        frame_rgb.flags.writeable = True
-        return result
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+        return self.detector.detect(mp_image)
 
     def desenhar(self, frame_bgr, result):
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        ann = frame_rgb.copy()
+        annotated = frame_rgb.copy()
 
-        # Pose corporal
-        if result.pose_landmarks:
-            self.mp_draw.draw_landmarks(
-                ann,
-                result.pose_landmarks,
-                self.mp_hol.POSE_CONNECTIONS,
-                self.mp_style.get_default_pose_landmarks_style(),
-            )
+        if result.hand_landmarks:
+            for hand_landmarks in result.hand_landmarks:
+                landmark_list = landmark_pb2.NormalizedLandmarkList()
 
-        # Mão direita
-        if result.right_hand_landmarks:
-            self.mp_draw.draw_landmarks(
-                ann,
-                result.right_hand_landmarks,
-                self.mp_hol.HAND_CONNECTIONS,
-                self.mp_style.get_default_hand_landmarks_style(),
-                self.mp_style.get_default_hand_connections_style(),
-            )
+                for lm in hand_landmarks:
+                    landmark = landmark_list.landmark.add()
+                    landmark.x = lm.x
+                    landmark.y = lm.y
+                    landmark.z = lm.z
 
-        # Mão esquerda
-        if result.left_hand_landmarks:
-            self.mp_draw.draw_landmarks(
-                ann,
-                result.left_hand_landmarks,
-                self.mp_hol.HAND_CONNECTIONS,
-                self.mp_style.get_default_hand_landmarks_style(),
-                self.mp_style.get_default_hand_connections_style(),
-            )
+                self.mp_draw.draw_landmarks(
+                    annotated,
+                    landmark_list,
+                    self.mp_connections,
+                    self.mp_style.get_default_hand_landmarks_style(),
+                    self.mp_style.get_default_hand_connections_style(),
+                )
 
-        return cv2.cvtColor(ann, cv2.COLOR_RGB2BGR)
-
-    # ── Normalizações por região ───────────────────────────────────────────────
+        return cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR)
 
     @staticmethod
     def _normalizar_mao(pts):
-        """Centraliza no pulso (lm 0) e escala pela distância palma→dedo médio (lm 9)."""
+        """Normalização robusta: centraliza no pulso e escala pela distância da palma."""
         pts = pts.astype(np.float32).copy()
-        pts -= pts[0]
-        ref = np.linalg.norm(pts[9])
+        center = pts[0].copy()
+        pts -= center
+
+        ref = np.linalg.norm(pts[9] - pts[0])
         if ref < 1e-6:
-            ref = float(np.max(np.abs(pts))) or 1.0
-        pts /= ref
-        return np.clip(pts, -3.0, 3.0)
-
-    @staticmethod
-    def _normalizar_pose(pts):
-        """Centraliza no centro dos quadris (lm 23+24) e escala pela largura dos ombros (lm 11-12)."""
-        pts = pts.astype(np.float32).copy()
-        centro = (pts[23] + pts[24]) / 2.0 if len(pts) > 24 else pts[0]
-        pts -= centro
-        ref = np.linalg.norm(pts[11] - pts[12]) if len(pts) > 12 else 0.0
+            ref = np.max(np.abs(pts))
         if ref < 1e-6:
-            ref = float(np.max(np.abs(pts))) or 1.0
-        pts /= ref
-        return np.clip(pts, -5.0, 5.0)
+            ref = 1.0
 
-
-    # ── Extração de features ──────────────────────────────────────────────────
-
-    # Mão dominante usada por quem está na câmera ("direita" ou "esquerda").
-    # A mão dominante sempre vai para o slot [0:63] (dominante) e a
-    # auxiliar para [63:126], garantindo compatibilidade entre destros e canhotos.
-    mao_dominante: str = "direita"
+        pts /= float(ref)
+        pts = np.clip(pts, -3.0, 3.0)
+        return pts
 
     def extrair_features(self, result):
-        """Retorna vetor 225: [dominante(63) | auxiliar(63) | pose(99)].
-
-        Otimizado para LIBRAS: mãos + contexto postural. Sem rosto (custoso, pouco discriminativo).
-        """
+        """Retorna vetor 126 (2 mãos). Se não houver mão: zeros."""
         feats = np.zeros(TOTAL_FEATURES, dtype=np.float32)
 
-        if self.mao_dominante == "esquerda":
-            lm_dom = result.left_hand_landmarks
-            lm_aux = result.right_hand_landmarks
-        else:
-            lm_dom = result.right_hand_landmarks
-            lm_aux = result.left_hand_landmarks
+        if not result.hand_landmarks:
+            return feats
 
-        # Mão dominante [0:63]
-        if lm_dom:
-            pts = np.array([[lm.x, lm.y, lm.z] for lm in lm_dom.landmark], dtype=np.float32)
-            feats[0:FEATURES_MAO] = self._normalizar_mao(pts).flatten()
+        for idx, hand in enumerate(result.hand_landmarks):
+            if idx >= MP_MAX_HANDS:
+                break
 
-        # Mão auxiliar [63:126]
-        if lm_aux:
-            pts = np.array([[lm.x, lm.y, lm.z] for lm in lm_aux.landmark], dtype=np.float32)
-            feats[FEATURES_MAO:FEATURES_MAOS] = self._normalizar_mao(pts).flatten()
+            pts = np.array([[lm.x, lm.y, lm.z] for lm in hand], dtype=np.float32)
+            pts = self._normalizar_mao(pts)
 
-        # Pose [126:225]
-        if result.pose_landmarks:
-            pts = np.array([[lm.x, lm.y, lm.z] for lm in result.pose_landmarks.landmark], dtype=np.float32)
-            feats[IDX_POSE_START:] = self._normalizar_pose(pts).flatten()
+            start = idx * FEATURES_PER_HAND
+            end = start + FEATURES_PER_HAND
+            feats[start:end] = pts.flatten()
 
         return feats
 
-    def tem_mao(self, result):
-        """Retorna True se qualquer mão foi detectada."""
-        return result.right_hand_landmarks is not None or result.left_hand_landmarks is not None
-
     def liberar(self):
         try:
-            self.holistic.close()
+            self.detector.close()
         except Exception:
             pass
 
@@ -360,6 +431,57 @@ class GerenciadorDados:
     def __init__(self):
         for d in [BASE_DIR, DIR_DADOS, DIR_ESTATICOS, DIR_DINAMICOS, DIR_MODELOS]:
             os.makedirs(d, exist_ok=True)
+        self._mapa_signer_publico = None  # cache: caminho absoluto -> signer_id
+
+    # ────────────────────────────────────────────────────────────────────
+    # SINALIZANTE (Fase 0 — split honesto de avaliação por pessoa)
+    # ────────────────────────────────────────────────────────────────────
+    def _carregar_mapa_signer_publico(self):
+        """Lê os logs vlibrasil_converter_*.csv e reconstrói, para cada
+        public_XXXX.npy já gerado, qual Articulador (sinalizante real do
+        V-Librasil) originou aquele arquivo. Sem isso, todo dado público
+        cairia num único grupo e o split por sinalizante seria inútil."""
+        if self._mapa_signer_publico is not None:
+            return self._mapa_signer_publico
+
+        mapa = {}
+        for csv_path in sorted(BASE_DIR.glob(VLIBRASIL_LOG_GLOB)):
+            try:
+                with open(csv_path, "r", encoding="utf-8", newline="") as f:
+                    for row in csv.DictReader(f):
+                        destino = row.get("destino", "").strip()
+                        arquivo = row.get("arquivo", "").strip()
+                        if not destino or not arquivo:
+                            continue
+                        m = re.search(r"Articulador\s*(\d+)", arquivo, flags=re.IGNORECASE)
+                        if not m:
+                            continue
+                        signer = f"Articulador{m.group(1)}"
+                        chave = str(Path(destino).resolve())
+                        mapa[chave] = signer
+            except Exception:
+                continue
+
+        self._mapa_signer_publico = mapa
+        return mapa
+
+    def _resolver_signer_id(self, caminho_arquivo, origem):
+        if origem == "public":
+            mapa = self._carregar_mapa_signer_publico()
+            chave = str(Path(caminho_arquivo).resolve())
+            signer = mapa.get(chave)
+            return f"public_{signer}" if signer else f"public_{SIGNER_DESCONHECIDO}"
+
+        nome = os.path.basename(caminho_arquivo)
+        m = re.match(r"local_(.+)_\d{4}\.npy$", nome, flags=re.IGNORECASE)
+        if m:
+            return f"local_{m.group(1).lower()}"
+        return f"local_{SIGNER_DESCONHECIDO}"
+
+    @staticmethod
+    def _slug_signer(signer_id):
+        slug = re.sub(r"[^a-z0-9]+", "", str(signer_id).strip().lower())
+        return slug or SIGNER_DESCONHECIDO
 
     def _pasta_tipo(self, tipo):
         return DIR_ESTATICOS if tipo == "estatico" else DIR_DINAMICOS
@@ -388,15 +510,26 @@ class GerenciadorDados:
                     continue
         return (max(nums) + 1) if nums else 0
 
-    def salvar_estatico(self, rotulo, features):
-        pasta = self._pasta_origem("estatico", rotulo, "local")
-        idx = self._proximo_indice(pasta, "local")
-        np.save(os.path.join(pasta, f"local_{idx:04d}.npy"), np.array(features, dtype=np.float32))
+    def _nome_arquivo_local(self, pasta, signer_id):
+        """local_<signer>_%04d.npy quando há signer_id; caso contrário
+        mantém o formato antigo local_%04d.npy (cai em signer 'desconhecido')."""
+        if signer_id:
+            slug = self._slug_signer(signer_id)
+            prefixo = f"local_{slug}_"
+        else:
+            prefixo = "local_"
+        idx = self._proximo_indice(pasta, prefixo)
+        return os.path.join(pasta, f"{prefixo}{idx:04d}.npy")
 
-    def salvar_dinamico(self, rotulo, sequencia):
+    def salvar_estatico(self, rotulo, features, signer_id=None):
+        pasta = self._pasta_origem("estatico", rotulo, "local")
+        caminho = self._nome_arquivo_local(pasta, signer_id)
+        np.save(caminho, np.array(features, dtype=np.float32))
+
+    def salvar_dinamico(self, rotulo, sequencia, signer_id=None):
         pasta = self._pasta_origem("dinamico", rotulo, "local")
-        idx = self._proximo_indice(pasta, "local")
-        np.save(os.path.join(pasta, f"local_{idx:04d}.npy"), np.array(sequencia, dtype=np.float32))
+        caminho = self._nome_arquivo_local(pasta, signer_id)
+        np.save(caminho, np.array(sequencia, dtype=np.float32))
 
     def _detectar_origem_arquivo(self, caminho_arquivo):
         pasta_pai = os.path.basename(os.path.dirname(caminho_arquivo)).lower()
@@ -427,9 +560,6 @@ class GerenciadorDados:
 
         return arquivos
 
-    # Pastas internas que não representam sinais reais e devem ser ignoradas
-    _PASTAS_RESERVADAS = {"DATA", "TEMP", "BACKUP", "TEST", "RAW", "TMP", "DEBUG"}
-
     def _carregar_por_tipo(self, tipo):
         base = self._pasta_tipo(tipo)
         X, y, meta = [], [], []
@@ -441,8 +571,6 @@ class GerenciadorDados:
             pasta_classe = os.path.join(base, rotulo)
             if not os.path.isdir(pasta_classe):
                 continue
-            if rotulo.upper() in self._PASTAS_RESERVADAS:
-                continue
 
             for caminho in self._listar_arquivos_npy(pasta_classe):
                 try:
@@ -451,9 +579,10 @@ class GerenciadorDados:
                     continue
 
                 origem = self._detectar_origem_arquivo(caminho)
+                signer_id = self._resolver_signer_id(caminho, origem)
                 X.append(arr)
                 y.append(rotulo)
-                meta.append({"rotulo": rotulo, "origem": origem, "arquivo": caminho})
+                meta.append({"rotulo": rotulo, "origem": origem, "arquivo": caminho, "signer_id": signer_id})
 
         return np.array(X, dtype=object), np.array(y), meta
 
@@ -491,28 +620,14 @@ class GerenciadorDados:
 class GerenciadorModelos:
     """Treino, inferência e persistência dos modelos estático/dinâmico."""
 
-    # Limiar: abaixo disso usa RF em vez de rede neural
-    _MIN_AMOSTRAS_LSTM = 10
-
     def __init__(self):
         self.modelo_estatico = None
         self.encoder_estatico = None
 
-        # Modelo dinâmico por rede neural (LSTM/GRU) — para muitas amostras
         self.modelo_dinamico = None
         self.encoder_dinamico = None
         self.norm_media_din = None
         self.norm_std_din = None
-
-        # Modelo dinâmico por RandomForest — para poucas amostras (≥ 3 basta)
-        self.modelo_dinamico_rf = None
-        self.encoder_dinamico_rf = None
-
-        # Modelo dinâmico por DTW (Dynamic Time Warping)
-        self.X_train_dtw = None  # sequências completas
-        self.y_train_dtw = None  # labels encoded
-        self.encoder_dtw = None
-        self.dtw_matrix = None   # cache de distâncias
 
         self._carregar_estatico()
         self._carregar_dinamico()
@@ -569,6 +684,72 @@ class GerenciadorModelos:
         cont = Counter(str(item.get("origem", "desconhecida")).lower() for item in meta)
         partes = [f"{origem}: {qtd}" for origem, qtd in sorted(cont.items())]
         return ", ".join(partes) if partes else "sem origem"
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # SPLIT HONESTO POR SINALIZANTE (Fase 0 do LSAE)
+    #
+    # train_test_split aleatório separa por AMOSTRA: variações da mesma pessoa
+    # podem cair em treino e teste ao mesmo tempo, e a acurácia medida fica
+    # inflada por vazamento entre sinalizante-visto-no-treino e
+    # sinalizante-visto-no-teste. GroupShuffleSplit por signer_id garante que
+    # cada pessoa fique inteira de um lado só — é a única forma honesta de
+    # medir se o modelo generaliza para quem não gravou os dados de treino.
+    # ──────────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _resumo_signers(meta):
+        cont = Counter(str(item.get("signer_id", "desconhecido")) for item in meta)
+        partes = [f"{signer}: {qtd}" for signer, qtd in sorted(cont.items())]
+        return ", ".join(partes) if partes else "sem sinalizante"
+
+    @staticmethod
+    def _split_honesto_por_sinalizante(X, y_enc, pesos, meta, test_size=0.25, random_state=42, log=None):
+        """Tenta separar treino/teste por grupo de sinalizante (GroupShuffleSplit).
+        Retorna (Xtr, Xte, ytr, yte, wtr, meta_te, modo) onde modo é
+        'grupo' (split honesto) ou None se não houver sinalizantes suficientes
+        para formar pelo menos 2 grupos (nesse caso o chamador deve cair de
+        volta para o split aleatório clássico)."""
+        groups = np.array([str(item.get("signer_id", "desconhecido")) for item in meta])
+        n_grupos = len(set(groups))
+
+        if log:
+            log(f"👤 Sinalizantes detectados ({n_grupos} grupos): {GerenciadorModelos._resumo_signers(meta)}")
+
+        if n_grupos < 2:
+            if log:
+                log(
+                    "⚠ Só existe 1 grupo de sinalizante conhecido — não é possível fazer um "
+                    "split honesto cross-signer ainda. Marque o campo 'ID do sinalizante' na "
+                    "coleta para habilitar essa medição."
+                )
+            return None
+
+        # Com poucos grupos (comum aqui: 3 articuladores do V-Librasil), passar
+        # test_size como fração de AMOSTRAS é traiçoeiro — o GroupShuffleSplit
+        # arredonda a fração para um número de GRUPOS internamente usando ceil(),
+        # o que pode inverter treino/teste (ex.: 0.33 de 3 grupos vira 2 grupos
+        # de teste por causa de erro de ponto flutuante). Calculamos o número de
+        # grupos de teste explicitamente e passamos como inteiro, que o
+        # GroupShuffleSplit interpreta como "N grupos inteiros para teste".
+        n_test_grupos = max(1, min(n_grupos - 1, round(test_size * n_grupos)))
+
+        gss = GroupShuffleSplit(n_splits=1, test_size=n_test_grupos, random_state=random_state)
+        idx_tr, idx_te = next(gss.split(X, y_enc, groups))
+
+        grupos_teste = sorted(set(groups[idx_te]))
+        if log:
+            log(
+                f"🎯 Split honesto por sinalizante: teste = {len(idx_te)} amostras "
+                f"de {len(grupos_teste)} grupo(s) ({', '.join(grupos_teste)}) | treino = {len(idx_tr)} amostras."
+            )
+
+        meta_arr = np.array(meta, dtype=object)
+        Xte_meta = list(meta_arr[idx_te])
+
+        return (
+            X[idx_tr], X[idx_te],
+            y_enc[idx_tr], y_enc[idx_te],
+            pesos[idx_tr], Xte_meta, "grupo",
+        )
 
     @staticmethod
     def _pad_or_crop_sequence(seq, target_len=SEQUENCE_LENGTH):
@@ -641,31 +822,24 @@ class GerenciadorModelos:
 
     @staticmethod
     def _espelhar_horizontal(seq):
-        """Inverte coordenada X em mãos e pose."""
         out = seq.copy()
-        blocos = [
-            (0,              FEATURES_MAOS),
-            (IDX_POSE_START, FEATURES_POSE),
-        ]
-        for start, length in blocos:
-            x_idx = np.arange(start, start + length, 3)
+        for hand_idx in range(MP_MAX_HANDS):
+            start = hand_idx * FEATURES_PER_HAND
+            x_idx = np.arange(start, start + FEATURES_PER_HAND, 3)
             out[:, x_idx] *= -1.0
         return out
 
     @staticmethod
     def _rotacionar_xy(seq, ang_deg):
-        """Rotaciona par (X,Y) em mãos e pose."""
         out = seq.copy()
         ang = np.deg2rad(ang_deg)
         c, s = np.cos(ang), np.sin(ang)
 
-        blocos = [
-            (0,              FEATURES_MAOS),
-            (IDX_POSE_START, FEATURES_POSE),
-        ]
-        for start, length in blocos:
-            x_idx = np.arange(start,     start + length, 3)
-            y_idx = np.arange(start + 1, start + length, 3)
+        for hand_idx in range(MP_MAX_HANDS):
+            start = hand_idx * FEATURES_PER_HAND
+            x_idx = np.arange(start, start + FEATURES_PER_HAND, 3)
+            y_idx = np.arange(start + 1, start + FEATURES_PER_HAND, 3)
+
             x = out[:, x_idx]
             y = out[:, y_idx]
             out[:, x_idx] = x * c - y * s
@@ -709,80 +883,73 @@ class GerenciadorModelos:
         return out.astype(np.float32)
 
     @staticmethod
-    def _validar_amostra_dinamica(seq):
-        """Valida qualidade da amostra durante coleta.
+    def _gerar_amostras_lsae(Xtr, ytr_s, wtr, encoder, log=None, fator_aumento=2, tentativas_por_amostra=6):
+        """Fase 5 do LSAE: gera amostras sintéticas SÓ a partir do TREINO
+        (Xtr/ytr_s já vêm pós-split — nunca toca no teste, evitando
+        vazamento). Usa o motor biomecânico (Pilar 2) + o filtro estatístico
+        (Fase 3), com o perfil (Pilar 1) e a variância pooled calculados
+        também só sobre esse treino. Retorna (X_sint, y_sint_enc, w_sint) —
+        arrays prontos para concatenar em Xtr/ytr_s/wtr antes da normalização."""
+        from lsae import motor_biomecanico, perfil_estatistico, validacao_estatistica
 
-        Retorna: (válida: bool, motivo: str, qualidade: float 0-1)
-        """
-        seq = np.asarray(seq, dtype=np.float32)
-        n_frames = len(seq)
+        vazio = (
+            np.empty((0,) + Xtr.shape[1:], dtype=np.float32),
+            np.array([], dtype=ytr_s.dtype),
+            np.array([], dtype=np.float32),
+        )
 
-        # Critério 1: Mínimo de frames
-        if n_frames < MIN_DYNAMIC_FRAMES:
-            score = n_frames / MIN_DYNAMIC_FRAMES
-            return False, f"movimento insuficiente ({n_frames}/<{MIN_DYNAMIC_FRAMES} frames)", score
+        rotulos_treino = list(encoder.inverse_transform(ytr_s))
+        Xtr_lista = [np.asarray(x, dtype=np.float32) for x in Xtr]
 
-        # Critério 2: Movimento significativo (variance média)
-        movimento = np.std(seq, axis=0).mean()
-        if movimento < 0.008:
-            score = movimento / 0.015
-            return False, f"muito estático (variância {movimento:.4f})", score
-
-        # Critério 3: Detecção de "glitches" (picos anormais)
+        perfis = perfil_estatistico.calcular_perfil_dinamico(Xtr_lista, rotulos_treino, min_amostras=2)
         try:
-            diffs = np.linalg.norm(np.diff(seq, axis=0), axis=1)
-            media_diff = np.mean(diffs)
-            std_diff = np.std(diffs)
-            outliers = np.sum(diffs > media_diff + 3*std_diff)
+            var_pooled = validacao_estatistica.estimar_variancia_pooled_dinamica(Xtr_lista, rotulos_treino)
+        except ValueError as exc:
+            if log:
+                log(f"⚠ LSAE desativado para este treino: {exc}")
+            return vazio
 
-            if outliers > n_frames * 0.2:
-                score = 1.0 - (outliers / n_frames)
-                return False, f"movimento irregular ({outliers} picos anormais)", score
-        except:
-            pass
+        rng = np.random.default_rng(42)
+        X_sint, y_sint_rotulo, w_sint = [], [], []
+        classes_sem_perfil = 0
 
-        # Qualidade final (0-1, baseado em tamanho e movimento)
-        qualidade = min(1.0, (n_frames / SEQUENCE_LENGTH) * (movimento / 0.05))
-        qualidade = np.clip(qualidade, 0.5, 1.0)  # mínimo 50%
+        for rotulo in sorted(set(rotulos_treino)):
+            if rotulo not in perfis:
+                classes_sem_perfil += 1
+                continue
 
-        return True, "✅ OK", qualidade
+            amostras_reais = [x for x, r in zip(Xtr_lista, rotulos_treino) if r == rotulo]
+            pesos_reais = [w for w, r in zip(wtr, rotulos_treino) if r == rotulo]
+            media_traj = perfis[rotulo]["media_trajetoria"]
+            peso_base = float(np.mean(pesos_reais)) * 0.9
 
-    @staticmethod
-    def _calcular_diversidade(lista_sequencias):
-        """Calcula similaridade média entre últimas N sequências.
+            alvo = len(amostras_reais) * fator_aumento
+            max_tentativas = alvo * tentativas_por_amostra
+            aceitas, tentativas = 0, 0
 
-        Retorna: (diversidade: float 0-1, alerta: str ou None)
-        """
-        if len(lista_sequencias) < 2:
-            return 1.0, None
+            while aceitas < alvo and tentativas < max_tentativas:
+                semente = amostras_reais[tentativas % len(amostras_reais)]
+                sint, _descartes_biomec = motor_biomecanico.augmentar_sequencia(semente, rng=rng)
+                r = validacao_estatistica.validar_estatisticamente_dinamico(sint, amostras_reais, media_traj, var_pooled)
+                tentativas += 1
+                if r["aceito"]:
+                    X_sint.append(sint)
+                    y_sint_rotulo.append(rotulo)
+                    w_sint.append(peso_base)
+                    aceitas += 1
 
-        # Usar últimas 5 ou quantas tiver
-        ultimas = lista_sequencias[-5:]
+        if log:
+            log(
+                f"🧬 LSAE (Fases 1-3): {len(X_sint)} amostras sintéticas geradas e aprovadas "
+                f"para {len(set(y_sint_rotulo))} sinais"
+                + (f" | {classes_sem_perfil} sinais sem perfil (só 1 amostra real)" if classes_sem_perfil else "")
+            )
 
-        # Calcular similaridade coseno pairwise
-        similaridades = []
-        for i in range(len(ultimas) - 1):
-            v1 = ultimas[i].flatten()
-            v2 = ultimas[i+1].flatten()
+        if not X_sint:
+            return vazio
 
-            # Normalizar
-            v1 = v1 / (np.linalg.norm(v1) + 1e-6)
-            v2 = v2 / (np.linalg.norm(v2) + 1e-6)
-
-            # Coseno (0 = diferentes, 1 = idênticos)
-            sim = np.dot(v1, v2)
-            similaridades.append(sim)
-
-        sim_media = np.mean(similaridades)
-        diversidade = 1.0 - sim_media  # 0 = idêntico, 1 = diferente
-
-        alerta = None
-        if diversidade < 0.08:
-            alerta = "⚠️  Últimas amostras MUITO similares — mude velocidade/posição"
-        elif diversidade < 0.15:
-            alerta = "⚠️  Últimas amostras similares — considere variar mais"
-
-        return diversidade, alerta
+        y_sint_enc = encoder.transform(y_sint_rotulo)
+        return np.array(X_sint, dtype=np.float32), y_sint_enc.astype(ytr_s.dtype), np.array(w_sint, dtype=np.float32)
 
     @staticmethod
     def _aumentar_dataset_dinamico(X, y, w, fator=1):
@@ -804,21 +971,9 @@ class GerenciadorModelos:
     # ──────────────────────────────────────────────────────────────────────────
     # ESTÁTICO (RandomForest)
     # ──────────────────────────────────────────────────────────────────────────
-    def treinar_estatico(self, X, y, meta, rotulos_prioritarios=None, peso_local=3.0, min_amostras_por_classe=2, log=None):
+    def treinar_estatico(self, X, y, meta, rotulos_prioritarios=None, peso_local=3.0, log=None):
         if len(X) == 0:
             return "❌ Nenhuma amostra estática encontrada."
-
-        # Filtrar classes com poucas amostras
-        min_n = max(2, int(min_amostras_por_classe))
-        cont_cls = Counter(y)
-        validas = {c for c, q in cont_cls.items() if q >= min_n}
-        if len(validas) < len(cont_cls) and log:
-            ignoradas = len(cont_cls) - len(validas)
-            log(f"⚠ Filtrando {ignoradas} classe(s) com menos de {min_n} amostras.")
-        X_f = [x for x, yl in zip(X, y) if yl in validas]
-        y_f = [yl for yl in y if yl in validas]
-        meta_f = [m for m, yl in zip(meta, y) if yl in validas]
-        X, y, meta = X_f, np.array(y_f), meta_f
 
         erro = self._validar_dataset(y)
         if erro:
@@ -832,9 +987,15 @@ class GerenciadorModelos:
         enc = LabelEncoder()
         y_enc = enc.fit_transform(y)
 
-        Xtr, Xte, ytr, yte, wtr, _, _, _ = train_test_split(
-            X, y_enc, pesos, meta, test_size=0.2, random_state=42, stratify=y_enc
-        )
+        resultado_split = self._split_honesto_por_sinalizante(X, y_enc, pesos, meta, test_size=0.25, log=log)
+
+        if resultado_split is not None:
+            Xtr, Xte, ytr, yte, wtr, meta_te, modo_split = resultado_split
+        else:
+            modo_split = "aleatorio_fallback"
+            Xtr, Xte, ytr, yte, wtr, _, _, meta_te = train_test_split(
+                X, y_enc, pesos, meta, test_size=0.2, random_state=42, stratify=y_enc
+            )
 
         if log:
             log("🔄 Treinando RandomForest (estático)...")
@@ -849,7 +1010,7 @@ class GerenciadorModelos:
 
         pred = mdl.predict(Xte)
         acc = accuracy_score(yte, pred)
-        report = classification_report(yte, pred, target_names=enc.classes_, zero_division=0)
+        report = classification_report(yte, pred, labels=range(len(enc.classes_)), target_names=enc.classes_, zero_division=0)
 
         self.modelo_estatico = mdl
         self.encoder_estatico = enc
@@ -859,9 +1020,18 @@ class GerenciadorModelos:
         with open(DIR_MODELOS / "encoder_estatico.pkl", "wb") as f:
             pickle.dump(enc, f)
 
+        if modo_split == "grupo":
+            titulo_acc = f"🎯 Acurácia CROSS-SIGNER (split honesto por sinalizante): {acc:.2%}\n"
+        else:
+            titulo_acc = (
+                f"Acurácia: {acc:.2%}\n"
+                "⚠ Split ALEATÓRIO clássico (não mede generalização cross-signer — "
+                "faltam sinalizantes distintos marcados nos dados locais).\n"
+            )
+
         return (
             "✅ MODELO ESTÁTICO TREINADO\n"
-            + f"Acurácia: {acc:.2%}\n"
+            + titulo_acc
             + f"Prioridades locais: {', '.join(sorted(prioridades)) if prioridades else '(nenhuma)'}\n"
             + "─" * 50
             + "\n"
@@ -887,492 +1057,44 @@ class GerenciadorModelos:
         if m.exists() and e.exists():
             try:
                 with open(m, "rb") as f:
-                    mdl = pickle.load(f)
+                    self.modelo_estatico = pickle.load(f)
 
-                n_feat = getattr(mdl, "n_features_in_", None)
-                if n_feat is not None and n_feat != TOTAL_FEATURES:
-                    print(
-                        f"⚠ Modelo estático incompatível ({n_feat} features, esperado {TOTAL_FEATURES}). "
-                        "Treine novamente."
-                    )
-                    return
-
-                self.modelo_estatico = mdl
                 with open(e, "rb") as f:
                     self.encoder_estatico = pickle.load(f)
 
             except Exception as exc:
-                print(f"Erro ao carregar modelo estático: {exc}")
+                print(f"Erro ao carregar modelo estático antigo: {exc}")
                 print("O modelo estático será ignorado. Treine novamente pela interface.")
                 self.modelo_estatico = None
                 self.encoder_estatico = None
 
 
     # ──────────────────────────────────────────────────────────────────────────
-    # DINÂMICO — features temporais (usadas pelo RF e pelo KNN)
-    # ──────────────────────────────────────────────────────────────────────────
-
-    # Pesos por bloco: mãos são essenciais em LIBRAS, pose fornece contexto
-    _PESOS_BLOCO = np.concatenate([
-        np.full(FEATURES_MAOS, 2.0),  # mãos: essencial
-        np.full(FEATURES_POSE, 1.0),  # pose: contexto
-    ]).astype(np.float32)
-
-    @staticmethod
-    def _extrair_features_seq(seq):
-        """Converte sequência (N×1629) em vetor fixo ponderado para KNN.
-
-        Divide em 3 segmentos temporais + velocidade média, depois aplica
-        pesos por bloco (mãos > pose > rosto) para que o KNN coseno foque
-        no que realmente discrimina os sinais.
-        Resultado: 1629×4 = 6516 features ponderadas.
-        """
-        seq = GerenciadorModelos._pad_or_crop_sequence(
-            np.asarray(seq, dtype=np.float32), SEQUENCE_LENGTH
-        )
-        n3 = SEQUENCE_LENGTH // 3
-        seg1 = seq[:n3].mean(axis=0)
-        seg2 = seq[n3: 2 * n3].mean(axis=0)
-        seg3 = seq[2 * n3:].mean(axis=0)
-        vel  = np.diff(seq, axis=0).mean(axis=0)
-
-        feat = np.concatenate([seg1, seg2, seg3, vel]).astype(np.float32)
-        # Repete os pesos para cobrir os 4 segmentos
-        pesos = np.tile(GerenciadorModelos._PESOS_BLOCO, 4)
-        return feat * pesos
-
-    @staticmethod
-    def _calcular_similarity_matrix(X_train, y_train, encoder, dtw_matrix, log=None):
-        """Gera matriz de similaridade média entre pares de sinais.
-
-        Retorna DataFrame com distâncias médias e acurácia pairwise.
-        """
-        try:
-            import pandas as pd
-        except ImportError:
-            return None
-
-        classes = encoder.classes_
-        n_classes = len(classes)
-
-        # Matriz de distâncias médias
-        sim_matrix = np.zeros((n_classes, n_classes))
-        acc_matrix = np.zeros((n_classes, n_classes))
-
-        y_enc = y_train
-
-        for i in range(n_classes):
-            for j in range(n_classes):
-                # Amostras da classe i e j
-                mask_i = y_enc == i
-                mask_j = y_enc == j
-                idx_i = np.where(mask_i)[0]
-                idx_j = np.where(mask_j)[0]
-
-                if len(idx_i) == 0 or len(idx_j) == 0:
-                    continue
-
-                # Distância média entre pares
-                dists = []
-                for ii in idx_i:
-                    for jj in idx_j:
-                        if ii != jj:
-                            d = dtw_matrix[ii, jj] if dtw_matrix is not None else 0
-                            dists.append(d)
-
-                if dists:
-                    sim_matrix[i, j] = np.mean(dists)
-                    # Acurácia: quantos pares da mesma classe estão mais próximos que da classe j
-                    if i == j:
-                        acc_matrix[i, j] = 1.0
-                    else:
-                        same_class_dist = [dtw_matrix[ii1, ii2] for ii1 in idx_i for ii2 in idx_i if ii1 < ii2]
-                        if same_class_dist and dists:
-                            mean_same = np.mean(same_class_dist)
-                            mean_diff = np.mean(dists)
-                            acc_matrix[i, j] = 1.0 / (1.0 + mean_diff / (mean_same + 1e-6))
-
-        df = pd.DataFrame(
-            sim_matrix,
-            index=classes,
-            columns=classes
-        )
-
-        if log:
-            log(f"✅ Matriz de similaridade gerada ({n_classes}×{n_classes})")
-
-        return df
-
-    def _treinar_dinamico_dtw(self, Xv, yv, metav, pesos, prioridades, enc, n_classes, log):
-        """DTW k=1 para sinais dinâmicos — compara sequências completas.
-
-        Vantagem sobre agregação: robusta a variação de velocidade.
-        Funciona com 10-20 amostras/classe.
-        """
-        if not DTW_DISPONIVEL:
-            if log:
-                log("⚠️  dtaidistance não instalado — usando KNN agregado")
-            return self._treinar_dinamico_rf(Xv, yv, metav, pesos, prioridades, enc, n_classes, log)
-
-        if log:
-            log("🔍 Modo DTW-KNN ativado (sequências temporais completas)")
-            log(f"📦 Armazenando {len(Xv)} sequências de {n_classes} sinais...")
-
-        # Guardar sequências inteiras (não agregadas)
-        self.X_train_dtw = np.array(Xv, dtype=np.float32)
-        self.y_train_dtw = enc.transform(yv)
-        self.encoder_dtw = enc
-
-        # Calcular matriz de DTW (computacionalmente custoso, feito 1x)
-        if log:
-            log(f"📐 Calculando matriz DTW {len(Xv)}×{len(Xv)} (pode levar alguns segundos)...")
-
-        n_seq = len(Xv)
-        self.dtw_matrix = np.zeros((n_seq, n_seq), dtype=np.float32)
-
-        for i in range(n_seq):
-            for j in range(i + 1, n_seq):
-                try:
-                    d = dtw.distance(
-                        Xv[i].astype(np.float64),
-                        Xv[j].astype(np.float64)
-                    )
-                    self.dtw_matrix[i, j] = d
-                    self.dtw_matrix[j, i] = d
-                except Exception as e:
-                    if log:
-                        log(f"⚠️  Erro DTW({i},{j}): {e}")
-                    self.dtw_matrix[i, j] = np.inf
-                    self.dtw_matrix[j, i] = np.inf
-
-            if log and (i + 1) % 10 == 0:
-                log(f"  ... {i + 1}/{n_seq} sequências processadas")
-
-        # Validação: acurácia via LOO (Leave-One-Out) aproximado
-        corretos = 0
-        for i in range(n_seq):
-            # Encontra vizinho mais próximo (excluindo ele mesmo)
-            dists = self.dtw_matrix[i].copy()
-            dists[i] = np.inf
-            idx_viz = np.argmin(dists)
-
-            if self.y_train_dtw[idx_viz] == self.y_train_dtw[i]:
-                corretos += 1
-
-        acc_loo = corretos / n_seq if n_seq > 0 else 0.0
-
-        # Gerar matriz de similaridade e relatório
-        if log:
-            log("📊 Gerando análise de similaridade (qual pares são confundíveis)...")
-
-        # Relatório estruturado
-        self.gerar_relatorio_similarity(log=log)
-
-        # Salvar matriz em CSV também (para visualização rápida)
-        sim_df = self._calcular_similarity_matrix(
-            Xv, yv, enc, self.dtw_matrix, log=log
-        )
-
-        if sim_df is not None:
-            sim_path = DIR_MODELOS / f"similarity_matrix_dtw_{timestamp_arquivo()}.csv"
-            try:
-                sim_df.to_csv(sim_path)
-                if log:
-                    log(f"💾 Matriz CSV salva: {sim_path}")
-            except:
-                pass
-
-        if log:
-            log(f"✅ DTW-KNN PRONTO")
-            log(f"📊 Acurácia LOO: {acc_loo:.1%} | Sequências: {n_seq} | Classes: {n_classes}")
-            log(f"🎯 Prioridades: {', '.join(sorted(prioridades)) if prioridades else '(nenhuma)'}")
-
-        return (
-            "✅ MODELO DINÂMICO (DTW) TREINADO\n"
-            f"Acurácia LOO: {acc_loo:.1%} | Sequências: {n_seq} | Classes: {n_classes}\n"
-            f"Prioridades: {', '.join(sorted(prioridades)) if prioridades else '(nenhuma)'}\n"
-            "─" * 50 + "\n"
-            "Pronto para reconhecer com DTW (robusto a variação de velocidade).\n"
-            "📊 Veja similarity_matrix_dtw_*.csv para análise de confusões.\n"
-        )
-
-    def gerar_relatorio_similarity(self, log=None):
-        """Gera relatório estruturado da similarity matrix para análise."""
-        if self.X_train_dtw is None or self.dtw_matrix is None:
-            return None
-
-        import json
-
-        classes = self.encoder_dtw.classes_
-        n_classes = len(classes)
-
-        relatorio = {
-            "timestamp": datetime.now().isoformat(),
-            "total_sequencias": len(self.X_train_dtw),
-            "total_classes": n_classes,
-            "analise_pairwise": {},
-            "classe_mais_isolada": None,
-            "classe_mais_confundivel": None,
-            "pares_confundíveis": []
-        }
-
-        # Análise por classe
-        for i in range(n_classes):
-            mask_i = self.y_train_dtw == i
-            idx_i = np.where(mask_i)[0]
-
-            # Distância média intra-classe (coesão)
-            intra_dists = []
-            for ii1 in idx_i:
-                for ii2 in idx_i:
-                    if ii1 < ii2:
-                        intra_dists.append(self.dtw_matrix[ii1, ii2])
-
-            intra_mean = np.mean(intra_dists) if intra_dists else np.inf
-
-            # Distância média inter-classe (para a classe mais próxima)
-            inter_dists_min = []
-            for j in range(n_classes):
-                if i == j:
-                    continue
-                mask_j = self.y_train_dtw == j
-                idx_j = np.where(mask_j)[0]
-
-                for ii in idx_i:
-                    for jj in idx_j:
-                        if ii != jj:
-                            inter_dists_min.append(self.dtw_matrix[ii, jj])
-
-            inter_mean = np.mean(inter_dists_min) if inter_dists_min else np.inf
-
-            # Score de isolamento (quanto maior, mais isolado)
-            isolamento = inter_mean / (intra_mean + 1e-6) if intra_mean < np.inf else 0
-
-            relatorio["analise_pairwise"][classes[i]] = {
-                "amostras": len(idx_i),
-                "coesao_intra": float(intra_mean),
-                "distancia_inter_min": float(inter_mean),
-                "isolamento": float(isolamento)
-            }
-
-        # Identificar classes extremas
-        isolamentos = [v["isolamento"] for v in relatorio["analise_pairwise"].values()]
-        if isolamentos:
-            relatorio["classe_mais_isolada"] = max(
-                relatorio["analise_pairwise"].items(),
-                key=lambda x: x[1]["isolamento"]
-            )[0]
-            relatorio["classe_mais_confundivel"] = min(
-                relatorio["analise_pairwise"].items(),
-                key=lambda x: x[1]["isolamento"]
-            )[0]
-
-        # Encontrar pares confundíveis
-        for i in range(n_classes):
-            for j in range(i + 1, n_classes):
-                mask_i = self.y_train_dtw == i
-                mask_j = self.y_train_dtw == j
-                idx_i = np.where(mask_i)[0]
-                idx_j = np.where(mask_j)[0]
-
-                dists = []
-                for ii in idx_i:
-                    for jj in idx_j:
-                        dists.append(self.dtw_matrix[ii, jj])
-
-                dist_media = np.mean(dists) if dists else np.inf
-
-                # Confundível se < 0.5 (escala normalizada)
-                if dist_media < 0.5:
-                    relatorio["pares_confundíveis"].append({
-                        "sinal_1": classes[i],
-                        "sinal_2": classes[j],
-                        "distancia_media": float(dist_media),
-                        "risco": "ALTO" if dist_media < 0.3 else "MÉDIO"
-                    })
-
-        # Ordenar pares confundíveis
-        relatorio["pares_confundíveis"].sort(key=lambda x: x["distancia_media"])
-
-        # Salvar relatório
-        rel_path = DIR_MODELOS / f"similarity_report_dtw_{timestamp_arquivo()}.json"
-        with open(rel_path, "w", encoding="utf-8") as f:
-            json.dump(relatorio, f, indent=2, ensure_ascii=False)
-
-        if log:
-            log(f"📄 Relatório salvo: {rel_path}")
-            log(f"✅ Classe mais isolada: {relatorio['classe_mais_isolada']}")
-            log(f"⚠️  Classe mais confundível: {relatorio['classe_mais_confundivel']}")
-            if relatorio["pares_confundíveis"]:
-                log(f"🔴 {len(relatorio['pares_confundíveis'])} pares confundíveis detectados")
-
-        return relatorio
-
-    def prever_dinamico_dtw(self, sequencia):
-        """Predição via DTW k=1 (vizinho mais próximo por distância DTW)."""
-        if self.X_train_dtw is None or self.encoder_dtw is None:
-            return None, 0.0
-
-        try:
-            seq = self._pad_or_crop_sequence(sequencia, SEQUENCE_LENGTH).astype(np.float64)
-
-            # Calcular DTW com cada sequência de treino
-            distancias = []
-            for x_train in self.X_train_dtw:
-                d = dtw.distance(seq, x_train.astype(np.float64))
-                distancias.append(d)
-
-            distancias = np.array(distancias)
-            idx_viz = np.argmin(distancias)
-            d_min = distancias[idx_viz]
-
-            # Confiança: inversa da distância normalizada
-            d_max = np.max(distancias)
-            d_media = np.median(distancias)
-
-            if d_max == d_min:
-                confianca = 1.0
-            else:
-                # Escalar: d_min é 1.0, d_media é 0.5
-                confianca = 1.0 - (d_min / d_media) if d_media > 0 else 0.5
-                confianca = np.clip(confianca, 0.0, 1.0)
-
-            rotulo = self.encoder_dtw.classes_[self.y_train_dtw[idx_viz]]
-            return rotulo, confianca
-        except Exception:
-            return None, 0.0
-
-    def _treinar_dinamico_rf(self, Xv, yv, metav, pesos, prioridades, enc, n_classes, log):
-        """KNN k=1 para sinais dinâmicos com poucas amostras.
-
-        Com 3 amostras/classe, classificadores tradicionais não generalizam.
-        KNN k=1 usa similaridade de cosseno para encontrar o template mais
-        parecido — funciona bem mesmo com 1-3 exemplos por classe.
-        Treina em TODAS as amostras (sem split) para maximizar cobertura.
-        """
-        if log:
-            log("🔍 Modo KNN ativado (poucas amostras/classe — busca pelo template mais similar).")
-            log(f"📦 Armazenando {len(Xv)} templates de {n_classes} sinais...")
-
-        X_feat = np.array([self._extrair_features_seq(s) for s in Xv], dtype=np.float32)
-        y_enc = enc.transform(yv)
-
-        # k=1: retorna o sinal mais parecido. Cosine é robusto para features de alta dimensão.
-        mdl = KNeighborsClassifier(n_neighbors=1, metric="cosine", algorithm="brute", n_jobs=-1)
-        mdl.fit(X_feat, y_enc)
-
-        # Avaliação leave-one-out rápida (só possível com todos os dados)
-        corretos = 0
-        for i in range(len(X_feat)):
-            # Ignora o próprio exemplo (simula LOO)
-            dists, idxs = mdl.kneighbors(X_feat[i:i+1], n_neighbors=min(4, len(X_feat)))
-            vizinhos = [(d, y_enc[j]) for d, j in zip(dists[0], idxs[0]) if j != i]
-            if vizinhos and vizinhos[0][1] == y_enc[i]:
-                corretos += 1
-        acc_loo = corretos / len(X_feat) if X_feat.size else 0.0
-
-        self.modelo_dinamico_rf = mdl
-        self.encoder_dinamico_rf = enc
-
-        with open(DIR_MODELOS / "modelo_dinamico_rf.pkl", "wb") as f:
-            pickle.dump(mdl, f)
-        with open(DIR_MODELOS / "encoder_dinamico_rf.pkl", "wb") as f:
-            pickle.dump(enc, f)
-
-        return (
-            "✅ MODELO DINÂMICO (KNN) TREINADO\n"
-            f"Acurácia LOO: {acc_loo:.2%} | Classes: {n_classes} | Templates: {len(Xv)}\n"
-            f"Prioridades locais: {', '.join(sorted(prioridades)) if prioridades else '(nenhuma)'}\n"
-            "─" * 50 + "\n"
-            "Pronto para reconhecer. Faça o sinal e retire a mão da câmera.\n"
-        )
-
-    def prever_dinamico_rf(self, sequencia):
-        """Predição via KNN k=1 (similaridade de cosseno com templates armazenados)."""
-        if self.modelo_dinamico_rf is None or self.encoder_dinamico_rf is None:
-            return None, 0.0
-        try:
-            feat = self._extrair_features_seq(sequencia).reshape(1, -1)
-            dist, idx = self.modelo_dinamico_rf.kneighbors(feat, n_neighbors=1)
-            distancia = float(dist[0][0])   # distância cosseno: 0 = idêntico, 2 = oposto
-            y_pred = int(self.modelo_dinamico_rf._y[idx[0][0]])
-            rotulo = self.encoder_dinamico_rf.classes_[y_pred]
-            # Converte distância em confiança: dist=0 → conf=1.0, dist=1 → conf=0.0
-            confianca = max(0.0, 1.0 - distancia)
-            return rotulo, confianca
-        except Exception:
-            return None, 0.0
-
-    def _carregar_dinamico_rf(self):
-        m = DIR_MODELOS / "modelo_dinamico_rf.pkl"
-        e = DIR_MODELOS / "encoder_dinamico_rf.pkl"
-        if m.exists() and e.exists():
-            try:
-                with open(m, "rb") as f:
-                    mdl = pickle.load(f)
-
-                n_feat = getattr(mdl, "n_features_in_", None)
-                feat_esperado = TOTAL_FEATURES * 4  # _extrair_features_seq: 4 segmentos
-                if n_feat is not None and n_feat != feat_esperado:
-                    print(
-                        f"⚠ Modelo dinâmico KNN incompatível ({n_feat} features, esperado {feat_esperado}). "
-                        "Treine novamente."
-                    )
-                    return
-
-                self.modelo_dinamico_rf = mdl
-                with open(e, "rb") as f:
-                    self.encoder_dinamico_rf = pickle.load(f)
-            except Exception as exc:
-                print(f"Erro ao carregar modelo dinâmico KNN: {exc}")
-                self.modelo_dinamico_rf = None
-                self.encoder_dinamico_rf = None
-
-    # ──────────────────────────────────────────────────────────────────────────
     # DINÂMICO (LSTM)
     # ──────────────────────────────────────────────────────────────────────────
-    def _criar_modelo_dinamico(self, n_classes, n_amostras=0):
-        """Arquitetura adaptativa: modelo simpler quando há muitas classes e poucas amostras."""
-        amostras_por_classe = n_amostras / max(n_classes, 1)
+    def _criar_modelo_dinamico(self, n_classes):
+        model = tf.keras.Sequential([
+            tf.keras.layers.Input(shape=(SEQUENCE_LENGTH, TOTAL_FEATURES)),
 
-        if n_classes > 50 or amostras_por_classe < 10:
-            # Dataset com muitas classes / poucas amostras por classe:
-            # modelo leve com GRU para evitar overfitting severo.
-            model = tf.keras.Sequential([
-                tf.keras.layers.Input(shape=(SEQUENCE_LENGTH, TOTAL_FEATURES)),
+            tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(128, return_sequences=True)),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dropout(0.30),
 
-                tf.keras.layers.GRU(128, return_sequences=True),
-                tf.keras.layers.Dropout(0.40),
+            tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(256, return_sequences=True)),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dropout(0.30),
 
-                tf.keras.layers.GRU(64, return_sequences=False),
-                tf.keras.layers.Dropout(0.40),
+            tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(256, return_sequences=False)),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dropout(0.35),
 
-                tf.keras.layers.Dense(128, activation="relu"),
-                tf.keras.layers.Dropout(0.35),
-                tf.keras.layers.Dense(n_classes, activation="softmax"),
-            ])
-            lr = 3e-4
-        else:
-            # Dataset menor com mais amostras por classe: BiLSTM completo.
-            model = tf.keras.Sequential([
-                tf.keras.layers.Input(shape=(SEQUENCE_LENGTH, TOTAL_FEATURES)),
-
-                tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(128, return_sequences=True)),
-                tf.keras.layers.BatchNormalization(),
-                tf.keras.layers.Dropout(0.30),
-
-                tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(256, return_sequences=False)),
-                tf.keras.layers.BatchNormalization(),
-                tf.keras.layers.Dropout(0.35),
-
-                tf.keras.layers.Dense(128, activation="relu"),
-                tf.keras.layers.Dropout(0.25),
-                tf.keras.layers.Dense(n_classes, activation="softmax"),
-            ])
-            lr = 1e-3
+            tf.keras.layers.Dense(128, activation="relu"),
+            tf.keras.layers.Dropout(0.25),
+            tf.keras.layers.Dense(n_classes, activation="softmax"),
+        ])
 
         model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
             loss="categorical_crossentropy",
             metrics=["accuracy"],
         )
@@ -1419,9 +1141,10 @@ class GerenciadorModelos:
         meta,
         rotulos_prioritarios=None,
         peso_local=3.0,
-        min_amostras_por_classe=2,
         log=None,
         progresso_epoca_cb=None,
+        augmentar_lsae=False,
+        fator_lsae=2,
     ):
         ok_tf, status_tf = verificar_tensorflow()
         if not ok_tf:
@@ -1444,12 +1167,8 @@ class GerenciadorModelos:
 
         pesos, prioridades = self._calcular_pesos_amostras(yv, metav, rotulos_prioritarios, peso_local)
 
-        min_n = max(2, int(min_amostras_por_classe))
         contagem_classes = Counter(yv)
-        classes_validas = {classe for classe, qtd in contagem_classes.items() if qtd >= min_n}
-        ignoradas = len(contagem_classes) - len(classes_validas)
-        if ignoradas > 0 and log:
-            log(f"⚠ Filtrando {ignoradas} classe(s) com menos de {min_n} amostras (total={sum(q for c,q in contagem_classes.items() if c not in classes_validas)} amostras removidas).")
+        classes_validas = {classe for classe, qtd in contagem_classes.items() if qtd >= 2}
 
         Xv_filtrado, yv_filtrado, metav_filtrado, pesos_filtrado = [], [], [], []
 
@@ -1472,35 +1191,18 @@ class GerenciadorModelos:
             return "❌ Após o filtro, restaram menos de 2 classes dinâmicas para treino."
 
         enc = LabelEncoder()
-        enc.fit(yv)
+        y_enc = enc.fit_transform(yv)
         n_classes = len(enc.classes_)
+
         qtd_amostras = len(Xv)
         qtd_classes = n_classes
 
-        amostras_por_classe = qtd_amostras / max(qtd_classes, 1)
-
-        if log:
-            log(f"📊 Classes dinâmicas: {qtd_classes} | Amostras: {qtd_amostras}")
-            log(f"📊 Média amostras/classe: {amostras_por_classe:.1f}")
-
-        # Estratégia por quantidade de dados
-        if amostras_por_classe < self._MIN_AMOSTRAS_LSTM:
-            # < 10 amostras/classe: usar DTW se disponível (melhor que KNN agregado)
-            if DTW_DISPONIVEL:
-                return self._treinar_dinamico_dtw(Xv, yv, metav, pesos, prioridades, enc, n_classes, log)
-            else:
-                return self._treinar_dinamico_rf(Xv, yv, metav, pesos, prioridades, enc, n_classes, log)
-        elif amostras_por_classe < 20:
-            # 10-20 amostras/classe: DTW é ótimo aqui (sequências completas, robusto)
-            if DTW_DISPONIVEL:
-                return self._treinar_dinamico_dtw(Xv, yv, metav, pesos, prioridades, enc, n_classes, log)
-            else:
-                return self._treinar_dinamico_rf(Xv, yv, metav, pesos, prioridades, enc, n_classes, log)
-
-        # --- LSTM path (muitas amostras) ---
-        y_enc = enc.transform(yv)
-
+        # O split estratificado exige ao menos 1 amostra por classe em cada
+        # partição. Com datasets grandes como o VLibrasil (3 vídeos/sinal),
+        # test_size precisa ser >= n_classes. Usamos no mínimo n_classes amostras
+        # no teste, mas limitamos a 40 % para não esvaziar o treino.
         test_size_abs = max(int(qtd_amostras * 0.2), qtd_classes)
+        test_size_abs = min(test_size_abs, int(qtd_amostras * 0.4))
 
         if test_size_abs >= qtd_amostras:
             test_size_abs = max(1, qtd_amostras - qtd_classes)
@@ -1509,47 +1211,73 @@ class GerenciadorModelos:
             return (
                 f"❌ Não há amostras suficientes para separar treino/teste.\n"
                 f"Amostras: {qtd_amostras} | Classes: {qtd_classes}\n"
-                f"Reduza a quantidade de classes ou colete mais amostras por classe."
+                f"Adicione mais vídeos por sinal (mínimo 2 por classe) e tente novamente."
             )
 
         if log:
-            log(f"📊 Tamanho do teste ajustado: {test_size_abs}")
+            log(f"📊 Classes dinâmicas: {qtd_classes}")
+            log(f"📊 Amostras totais:    {qtd_amostras}")
+            log(f"📊 Treino / Teste (alvo aproximado): {qtd_amostras - test_size_abs} / {test_size_abs}")
 
-        Xtr, Xte, ytr_s, yte_s, wtr, _, _, _ = train_test_split(
-            Xv, y_enc, pesos, metav,
-            test_size=test_size_abs,
-            random_state=42,
-            stratify=y_enc
+        resultado_split = self._split_honesto_por_sinalizante(
+            Xv, y_enc, pesos, metav, test_size=test_size_abs / qtd_amostras, log=log
         )
+
+        if resultado_split is not None:
+            Xtr, Xte, ytr_s, yte_s, wtr, _, modo_split = resultado_split
+        else:
+            modo_split = "aleatorio_fallback"
+            # Tenta split estratificado (garante proporção de classes em treino/teste).
+            # Com poucos exemplos por classe (ex.: 3 do VLibrasil) pode falhar —
+            # nesse caso cai para split aleatório simples, que ainda é válido.
+            try:
+                Xtr, Xte, ytr_s, yte_s, wtr, _, _, _ = train_test_split(
+                    Xv, y_enc, pesos, metav,
+                    test_size=test_size_abs,
+                    random_state=42,
+                    stratify=y_enc,
+                )
+            except ValueError as e_strat:
+                if log:
+                    log(f"⚠ Split estratificado não possível ({e_strat}). Usando split aleatório.")
+                Xtr, Xte, ytr_s, yte_s, wtr, _, _, _ = train_test_split(
+                    Xv, y_enc, pesos, metav,
+                    test_size=test_size_abs,
+                    random_state=42,
+                )
+
+        if augmentar_lsae:
+            try:
+                X_sint, y_sint, w_sint = self._gerar_amostras_lsae(Xtr, ytr_s, wtr, enc, log=log, fator_aumento=fator_lsae)
+                if len(X_sint) > 0:
+                    Xtr = np.concatenate([Xtr, X_sint], axis=0)
+                    ytr_s = np.concatenate([ytr_s, y_sint], axis=0)
+                    wtr = np.concatenate([wtr, w_sint], axis=0)
+            except Exception as exc:
+                if log:
+                    log(f"⚠ Falha ao gerar amostras LSAE, seguindo sem augmentation extra: {exc}")
 
         Xtr, Xte, media, std = self._normalizar_dinamico_train_test(Xtr, Xte)
         self.norm_media_din = media
         self.norm_std_din = std
 
-        # Augmentation agressivo baseado nas amostras de treino
-        fator_aug = 3 if (len(Xtr) / max(n_classes, 1)) < 20 else 1
-
-        Xtr_aug, ytr_aug, wtr_aug = self._aumentar_dataset_dinamico(Xtr, ytr_s, wtr, fator=fator_aug)
+        Xtr_aug, ytr_aug, wtr_aug = self._aumentar_dataset_dinamico(Xtr, ytr_s, wtr, fator=1)
 
         ytr = tf.keras.utils.to_categorical(ytr_aug, n_classes)
         yte = tf.keras.utils.to_categorical(yte_s, n_classes)
 
-        # Batch size adaptativo
-        batch_size = min(64, max(16, len(Xtr_aug) // 50))
-
         if log:
-            log("🔄 Treinando modelo dinâmico...")
+            log("🔄 Treinando LSTM (dinâmico)...")
             log(f"📚 Dataset híbrido: {self._resumo_origens(metav)}")
             log(
                 f"🎯 Sinais locais priorizados: "
                 f"{', '.join(sorted(prioridades)) if prioridades else '(nenhum)'}"
                 f" | peso extra: {peso_local:.2f}x"
             )
-            log(f"🧪 Treino original: {len(Xtr)} | com augmentation (fator={fator_aug}): {len(Xtr_aug)}")
+            log(f"🧪 Treino original: {len(Xtr)} | com augmentation: {len(Xtr_aug)}")
             log(f"📐 Shape treino: {Xtr_aug.shape} | validação: {Xte.shape}")
-            log(f"⚙️  batch_size={batch_size} | amostras/classe≈{amostras_por_classe:.1f}")
 
-        model = self._criar_modelo_dinamico(n_classes, n_amostras=len(Xtr_aug))
+        model = self._criar_modelo_dinamico(n_classes)
         chk_path = DIR_MODELOS / "modelo_dinamico_best.keras"
 
         class EpochProgressCallback(tf.keras.callbacks.Callback):
@@ -1602,7 +1330,7 @@ class GerenciadorModelos:
         hist = model.fit(
             Xtr_aug, ytr,
             epochs=150,
-            batch_size=batch_size,
+            batch_size=32,
             validation_data=(Xte, yte),
             callbacks=callbacks,
             sample_weight=wtr_aug,
@@ -1617,7 +1345,9 @@ class GerenciadorModelos:
 
         _, acc = model.evaluate(Xte, yte, verbose=0)
         pred = np.argmax(model.predict(Xte, verbose=0), axis=1)
-        report = classification_report(yte_s, pred, labels=list(range(n_classes)), target_names=enc.classes_, zero_division=0)
+        report = classification_report(
+            yte_s, pred, labels=range(n_classes), target_names=enc.classes_, zero_division=0
+        )
 
         self.modelo_dinamico = model
         self.encoder_dinamico = enc
@@ -1632,12 +1362,22 @@ class GerenciadorModelos:
             std=self.norm_std_din,
         )
 
+        if modo_split == "grupo":
+            titulo_acc = f"🎯 Acurácia CROSS-SIGNER (split honesto por sinalizante): {acc:.2%}"
+        else:
+            titulo_acc = (
+                f"Acurácia: {acc:.2%}\n"
+                "⚠ Split ALEATÓRIO clássico (não mede generalização cross-signer — "
+                "faltam sinalizantes distintos marcados nos dados locais)."
+            )
+
         grafico = self._plotar_historico(hist)
         msg = (
             "✅ MODELO DINÂMICO TREINADO\n"
-            + f"Acurácia: {acc:.2%} | Épocas executadas: {len(hist.history.get('loss', []))}\n"
+            + f"{titulo_acc} | Épocas executadas: {len(hist.history.get('loss', []))}\n"
             + f"Classes treinadas: {n_classes}\n"
             + f"Amostras usadas: {qtd_amostras}\n"
+            + f"LSAE (Pilares 1-3): {'ativado, fator=' + str(fator_lsae) if augmentar_lsae else 'desativado'}\n"
             + f"Prioridades locais: {', '.join(sorted(prioridades)) if prioridades else '(nenhuma)'}\n"
         )
         if grafico:
@@ -1649,14 +1389,6 @@ class GerenciadorModelos:
 
 
     def prever_dinamico(self, sequencia):
-        # DTW tem prioridade (melhor que agregação para variação de velocidade)
-        if self.X_train_dtw is not None:
-            return self.prever_dinamico_dtw(sequencia)
-
-        # Fallback: KNN agregado
-        if self.modelo_dinamico_rf is not None:
-            return self.prever_dinamico_rf(sequencia)
-
         if self.modelo_dinamico is None or self.encoder_dinamico is None:
             return None, 0.0
 
@@ -1676,11 +1408,12 @@ class GerenciadorModelos:
             return None, 0.0
 
     def _carregar_dinamico(self):
-        # Carrega RF primeiro (não precisa de TF)
-        self._carregar_dinamico_rf()
+        self.erro_carregar_dinamico = None
 
-        ok_tf, _ = verificar_tensorflow()
+        ok_tf, status_tf = verificar_tensorflow()
         if not ok_tf:
+            self.erro_carregar_dinamico = f"TensorFlow indisponível: {status_tf}"
+            print(f"[Dinâmico] {self.erro_carregar_dinamico} — modelo dinâmico não será carregado.")
             return
 
         m = DIR_MODELOS / "modelo_dinamico.keras"
@@ -1692,18 +1425,43 @@ class GerenciadorModelos:
                 self.modelo_dinamico = tf.keras.models.load_model(m)
                 with open(e, "rb") as f:
                     self.encoder_dinamico = pickle.load(f)
-            except Exception:
+                print(f"[Dinâmico] Modelo carregado de '{m}' ({len(self.encoder_dinamico.classes_)} classes).")
+            except Exception as exc:
                 self.modelo_dinamico = None
                 self.encoder_dinamico = None
+                self.erro_carregar_dinamico = f"Falha ao carregar modelo dinâmico salvo em '{m}': {exc}"
+                print(f"Erro ao carregar modelo dinâmico: {exc}")
+                print("O modelo dinâmico será ignorado. Treine novamente pela interface.")
+                traceback.print_exc()
+        elif m.exists() or e.exists():
+            self.erro_carregar_dinamico = (
+                f"Arquivos do modelo dinâmico incompletos — "
+                f"modelo_dinamico.keras existe={m.exists()}, encoder_dinamico.pkl existe={e.exists()}. "
+                f"Os dois arquivos são necessários para carregar o modelo."
+            )
+            print(f"[Dinâmico] {self.erro_carregar_dinamico}")
+        else:
+            print(f"[Dinâmico] Nenhum modelo salvo encontrado em '{DIR_MODELOS}' (ainda não treinado).")
 
         if n.exists():
             try:
                 data = np.load(n)
                 self.norm_media_din = data["media"].astype(np.float32)
                 self.norm_std_din = data["std"].astype(np.float32)
-            except Exception:
+            except Exception as exc:
                 self.norm_media_din = None
                 self.norm_std_din = None
+                aviso = f"Falha ao carregar normalização dinâmica de '{n}': {exc}"
+                self.erro_carregar_dinamico = (
+                    f"{self.erro_carregar_dinamico} | {aviso}" if self.erro_carregar_dinamico else aviso
+                )
+                print(f"Erro ao carregar normalização dinâmica: {exc}")
+        elif self.modelo_dinamico is not None:
+            aviso = f"'{n}' não encontrado — predições do modelo dinâmico usarão dados sem normalização."
+            self.erro_carregar_dinamico = (
+                f"{self.erro_carregar_dinamico} | {aviso}" if self.erro_carregar_dinamico else aviso
+            )
+            print(f"[Dinâmico] {aviso}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1732,33 +1490,15 @@ class LibrasApp(tk.Tk):
         # Coleta
         self.tipo_coleta = None  # estatico/dinamico
         self.rotulo_coleta = ""
+        self.signer_coleta = None
         self.amostras_coletadas = 0
         self.amostras_alvo = 0
         self.seq_buffer = []
-
-        # Segmentação automática (coleta dinâmica)
-        # Estados: "aguardando_espaco" → [SPACE] → "aguardando_mao" → mão aparece
-        #          → "gravando" → mão some N frames → salva → "aguardando_espaco"
-        self.seg_estado = "aguardando_espaco"
-        self.seg_frames_sem_mao = 0      # contador de frames sem mão após gravação
-        self.SEG_FRAMES_PAUSA = 8        # frames sem mão para confirmar fim do sinal
-
-        # Validação e diversidade
-        self.buffer_ultimas_amostras = []  # últimas 5 amostras para verificar diversidade
-        self.estatisticas_coleta = {      # tracker de qualidade durante coleta
-            "total_validas": 0,
-            "total_rejeitadas": 0,
-            "qualidades": [],
-            "diversidades": []
-        }
 
         # Reconhecimento
         self.hold_pred = ""
         self.hold_start = 0.0
         self.seq_rec = []
-        self.hand_was_visible = False  # controla disparo de predição dinâmica
-        self.ultimo_pred = ""          # último sinal reconhecido (mantido na tela)
-        self.ultima_conf = 0.0
 
         # Debug/diagnóstico
         self.last_log_rec = 0.0
@@ -1766,8 +1506,14 @@ class LibrasApp(tk.Tk):
         self._aplicar_estilo()
         self._ui()
         self._atualizar_status_tensorflow()
+        if getattr(self.modelos, "erro_carregar_dinamico", None):
+            self._log(f"⚠ Modelo dinâmico salvo não foi carregado: {self.modelos.erro_carregar_dinamico}")
+        elif self.modelos.modelo_dinamico is not None:
+            self._log(
+                f"✅ Modelo dinâmico carregado ({len(self.modelos.encoder_dinamico.classes_)} classes): "
+                f"{', '.join(self.modelos.encoder_dinamico.classes_)}"
+            )
         self._iniciar_camera()
-        self.bind("<space>", self._tecla_espaco)
         self.protocol("WM_DELETE_WINDOW", self._fechar)
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -1828,7 +1574,6 @@ class LibrasApp(tk.Tk):
         self._aba_coleta()
         self._aba_treino()
         self._aba_rec()
-        self._aba_transcricao()
 
         # Inferior: texto
         bottom = ttk.LabelFrame(self, text="📝 Texto Traduzido", padding=10)
@@ -1861,20 +1606,13 @@ class LibrasApp(tk.Tk):
         box = ttk.LabelFrame(aba, text="Ensinar novo sinal", padding=10)
         box.pack(fill=tk.X)
 
-        # Mão dominante — afeta coleta e reconhecimento
-        dom_frame = ttk.LabelFrame(box, text="Mão dominante de quem está na câmera", padding=6)
-        dom_frame.pack(fill=tk.X, pady=(0, 10))
-        self.var_mao_dom = tk.StringVar(value="direita")
-        ttk.Radiobutton(dom_frame, text="✋ Direita (destro)", variable=self.var_mao_dom, value="direita",
-                        command=self._aplicar_mao_dominante).pack(side=tk.LEFT, padx=10)
-        ttk.Radiobutton(dom_frame, text="🤚 Esquerda (canhoto)", variable=self.var_mao_dom, value="esquerda",
-                        command=self._aplicar_mao_dominante).pack(side=tk.LEFT, padx=10)
-        ttk.Label(dom_frame, text="Mude antes de gravar ou reconhecer!", foreground=COR_YELLOW,
-                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=8)
-
         ttk.Label(box, text="Nome do sinal/letra/número (ex: A, B, 1, OLA, OBRIGADO):").pack(anchor=tk.W)
         self.entry_rotulo = ttk.Entry(box, font=("Segoe UI", 12))
         self.entry_rotulo.pack(fill=tk.X, pady=(2, 8))
+
+        ttk.Label(box, text="ID do sinalizante (seu nome/apelido — usado para medir generalização entre pessoas):").pack(anchor=tk.W)
+        self.entry_signer = ttk.Entry(box, font=("Segoe UI", 12))
+        self.entry_signer.pack(fill=tk.X, pady=(2, 8))
 
         ttk.Label(box, text="Quantidade de amostras:").pack(anchor=tk.W)
         self.var_qtd = tk.IntVar(value=50)
@@ -1915,8 +1653,7 @@ class LibrasApp(tk.Tk):
     def _config_treino_hibrido(self):
         rotulos = self.entry_prioritarios.get().strip().upper()
         peso_local = float(self.var_peso_local.get())
-        min_amostras = int(self.var_min_amostras.get())
-        return rotulos, peso_local, min_amostras
+        return rotulos, peso_local
 
     def _aba_treino(self):
         aba = ttk.Frame(self.nb, padding=15)
@@ -1937,13 +1674,6 @@ class LibrasApp(tk.Tk):
         self.lbl_peso_local.pack(anchor=tk.E)
         self.var_peso_local.trace_add("write", lambda *_: self.lbl_peso_local.configure(text=f"{self.var_peso_local.get():.2f}x"))
 
-        ttk.Label(cfg, text="Mínimo de amostras por classe (filtra classes com poucos dados):").pack(anchor=tk.W, pady=(8, 0))
-        self.var_min_amostras = tk.IntVar(value=2)
-        fr_min = ttk.Frame(cfg)
-        fr_min.pack(fill=tk.X, pady=(2, 0))
-        for v in (2, 5, 10, 20):
-            ttk.Radiobutton(fr_min, text=str(v), variable=self.var_min_amostras, value=v).pack(side=tk.LEFT, padx=5)
-
         self.var_debug = tk.BooleanVar(value=False)
         ttk.Checkbutton(cfg, text="Modo debug (logs detalhados)", variable=self.var_debug).pack(anchor=tk.W, pady=(8, 0))
 
@@ -1955,6 +1685,9 @@ class LibrasApp(tk.Tk):
 
         self.lbl_tf_status = ttk.Label(cfg, text="TensorFlow: verificando...", foreground=COR_YELLOW)
         self.lbl_tf_status.pack(anchor=tk.W, pady=(10, 2))
+
+        self.btn_instalar_tf = ttk.Button(cfg, text="📦 Instalar TensorFlow", style="Danger.TButton", command=self._instalar_tensorflow_ui)
+        self.btn_instalar_tf.pack(anchor=tk.W)
 
         bar = ttk.Frame(aba)
         bar.pack(fill=tk.X, pady=(0, 10))
@@ -1990,9 +1723,9 @@ class LibrasApp(tk.Tk):
         cfg.pack(fill=tk.X, pady=(0, 10))
 
         ttk.Label(cfg, text="Limiar de confiança:").pack(anchor=tk.W)
-        self.var_conf = tk.DoubleVar(value=0.50)
+        self.var_conf = tk.DoubleVar(value=0.7)
         ttk.Scale(cfg, from_=0.3, to=0.99, variable=self.var_conf, orient="horizontal").pack(fill=tk.X)
-        self.lbl_conf = ttk.Label(cfg, text="0.50", foreground=COR_PEACH)
+        self.lbl_conf = ttk.Label(cfg, text="0.70", foreground=COR_PEACH)
         self.lbl_conf.pack(anchor=tk.E)
         self.var_conf.trace_add("write", lambda *_: self.lbl_conf.configure(text=f"{self.var_conf.get():.2f}"))
 
@@ -2013,66 +1746,6 @@ class LibrasApp(tk.Tk):
         self.lbl_info = ttk.Label(aba, text="ℹ Treine os modelos antes de reconhecer.", foreground=COR_YELLOW)
         self.lbl_info.pack(pady=10)
 
-    def _aba_transcricao(self):
-        aba = ttk.Frame(self.nb, padding=15)
-        self.nb.add(aba, text="✍️ Transcrição")
-
-        # Modo de transcrição
-        mode = ttk.LabelFrame(aba, text="Configuração", padding=10)
-        mode.pack(fill=tk.X, pady=(0, 10))
-
-        ttk.Label(mode, text="Modo de tradução:").pack(anchor=tk.W)
-        self.var_modo_trans = tk.StringVar(value="dinamico")
-        ttk.Radiobutton(mode, text="👋 Dinâmico (gestos)", variable=self.var_modo_trans, value="dinamico").pack(anchor=tk.W)
-        ttk.Radiobutton(mode, text="🖐 Estático (letras)", variable=self.var_modo_trans, value="estatico").pack(anchor=tk.W)
-        ttk.Radiobutton(mode, text="🤟 Ambos", variable=self.var_modo_trans, value="ambos").pack(anchor=tk.W)
-
-        # Controles
-        btn_frame = ttk.Frame(aba)
-        btn_frame.pack(fill=tk.X, pady=10)
-        self.btn_trans_start = ttk.Button(btn_frame, text="🎥 Iniciar Transcrição", style="Accent.TButton", command=self._iniciar_transcricao)
-        self.btn_trans_start.pack(side=tk.LEFT, padx=5)
-        self.btn_trans_stop = ttk.Button(btn_frame, text="⏹ Parar", style="Danger.TButton", command=self._parar_transcricao, state=tk.DISABLED)
-        self.btn_trans_stop.pack(side=tk.LEFT, padx=5)
-
-        ttk.Button(btn_frame, text="💾 Salvar", command=self._salvar_transcricao).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="🗑 Limpar", style="Danger.TButton", command=self._limpar_transcricao).pack(side=tk.LEFT, padx=5)
-
-        # Texto traduzido
-        txt_frame = ttk.LabelFrame(aba, text="Transcrição em Tempo Real", padding=10)
-        txt_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-
-        self.txt_trans = scrolledtext.ScrolledText(
-            txt_frame,
-            height=8,
-            bg=COR_BG2,
-            fg=COR_GREEN,
-            font=("Consolas", 12),
-            insertbackground=COR_FG,
-            wrap=tk.WORD,
-            state=tk.DISABLED
-        )
-        self.txt_trans.pack(fill=tk.BOTH, expand=True)
-
-        # Histórico com timestamps
-        hist_frame = ttk.LabelFrame(aba, text="Histórico (últimos 10 gestos)", padding=10)
-        hist_frame.pack(fill=tk.BOTH, expand=True)
-
-        self.txt_historico = scrolledtext.ScrolledText(
-            hist_frame,
-            height=5,
-            bg=COR_BG2,
-            fg=COR_PEACH,
-            font=("Consolas", 9),
-            state=tk.DISABLED
-        )
-        self.txt_historico.pack(fill=tk.BOTH, expand=True)
-
-        # Estado de transcrição
-        self.transcrição_ativa = False
-        self.transcrição_buffer = []
-        self.transcrição_timestamps = []
-
     # ──────────────────────────────────────────────────────────────────────────
     # UTIL
     # ──────────────────────────────────────────────────────────────────────────
@@ -2087,36 +1760,6 @@ class LibrasApp(tk.Tk):
         if self.var_debug.get():
             self._log(f"[DEBUG] {s}")
 
-    def _log_validacao(self, motivo, qualidade, diversidade, alerta_diversidade):
-        """Log formatado de validação com estatísticas."""
-        n = self.amostras_coletadas
-        q_media = np.mean(self.estatisticas_coleta["qualidades"][-10:]) if self.estatisticas_coleta["qualidades"] else 0
-        d_media = np.mean(self.estatisticas_coleta["diversidades"][-5:]) if self.estatisticas_coleta["diversidades"] else 0
-
-        msg = f"#{n} {motivo} | qualidade={qualidade:.0%}"
-        if q_media > 0:
-            msg += f" (média={q_media:.0%})"
-        msg += f" | diversidade={diversidade:.3f}"
-
-        self._log(msg)
-
-        if alerta_diversidade:
-            self._log(alerta_diversidade)
-
-    def _tecla_espaco(self, event=None):
-        """Avança para o próximo sinal na coleta dinâmica com segmentação."""
-        if self.coletando and self.tipo_coleta == "dinamico":
-            if self.seg_estado == "aguardando_espaco":
-                self.seg_estado = "aguardando_mao"
-                self.seq_buffer = []
-                self.seg_frames_sem_mao = 0
-
-    def _aplicar_mao_dominante(self):
-        """Atualiza o detector com a mão dominante selecionada."""
-        if self.detector:
-            self.detector.mao_dominante = self.var_mao_dom.get()
-            self._log(f"✋ Mão dominante: {self.detector.mao_dominante}")
-
     def _apagar_ultimo(self):
         c = self.txt.get("1.0", tk.END).rstrip("\n")
         if c:
@@ -2126,7 +1769,41 @@ class LibrasApp(tk.Tk):
     def _atualizar_status_tensorflow(self):
         ok, status = verificar_tensorflow()
         self.lbl_tf_status.configure(text=f"TensorFlow: {status}", foreground=COR_GREEN if ok else COR_RED)
-        self.btn_treinar_din.configure(state=tk.NORMAL if ok else tk.DISABLED)
+
+        if ok:
+            self.btn_instalar_tf.configure(state=tk.DISABLED)
+            self.btn_treinar_din.configure(state=tk.NORMAL)
+        else:
+            self.btn_instalar_tf.configure(state=tk.NORMAL)
+            self.btn_treinar_din.configure(state=tk.DISABLED)
+
+    def _instalar_tensorflow_ui(self):
+        self.btn_instalar_tf.configure(state=tk.DISABLED)
+        self._log("📦 Solicitação de instalação do TensorFlow...")
+
+        def job():
+            ok, msg = instalar_tensorflow(log_fn=lambda m: self.after(0, self._log, m))
+            self.after(0, self._log, msg)
+
+            def finish():
+                self._atualizar_status_tensorflow()
+                if ok:
+                    self.modelos._carregar_dinamico()
+                    if getattr(self.modelos, "erro_carregar_dinamico", None):
+                        self._log(f"⚠ Modelo dinâmico salvo não foi carregado: {self.modelos.erro_carregar_dinamico}")
+                        messagebox.showwarning(
+                            "TensorFlow",
+                            "TensorFlow instalado, mas o modelo dinâmico salvo não pôde ser carregado.\n"
+                            f"{self.modelos.erro_carregar_dinamico}\n\nVeja o log para detalhes.",
+                        )
+                    else:
+                        messagebox.showinfo("TensorFlow", "✅ TensorFlow instalado e pronto para treino dinâmico.")
+                else:
+                    messagebox.showwarning("TensorFlow", msg)
+
+            self.after(0, finish)
+
+        threading.Thread(target=job, daemon=True).start()
 
     # ──────────────────────────────────────────────────────────────────────────
     # POPUP TIPO
@@ -2189,23 +1866,10 @@ class LibrasApp(tk.Tk):
 
         self.tipo_coleta = tipo
         self.rotulo_coleta = rotulo
+        self.signer_coleta = self.entry_signer.get().strip() or None
         self.amostras_alvo = int(self.var_qtd.get())
         self.amostras_coletadas = 0
         self.seq_buffer = []
-
-        # Reseta estado de segmentação automática
-        self.seg_estado = "aguardando_espaco"
-        self.seg_frames_sem_mao = 0
-
-        # Reseta buffer e estatísticas
-        self.buffer_ultimas_amostras = []
-        self.estatisticas_coleta = {
-            "total_validas": 0,
-            "total_rejeitadas": 0,
-            "qualidades": [],
-            "diversidades": []
-        }
-
         self.coletando = True
 
         self.btn_start_collect.configure(state=tk.DISABLED)
@@ -2214,7 +1878,15 @@ class LibrasApp(tk.Tk):
         self.prog["maximum"] = self.amostras_alvo
         self.prog["value"] = 0
         self.lbl_prog.configure(text=f"📦 Coletando '{rotulo}' ({tipo}) em: {pasta}")
-        self._log(f"📦 Coleta iniciada | rótulo={rotulo} | tipo={tipo} | alvo={self.amostras_alvo}")
+        self._log(
+            f"📦 Coleta iniciada | rótulo={rotulo} | tipo={tipo} | alvo={self.amostras_alvo} | "
+            f"sinalizante={self.signer_coleta or '(não informado → desconhecido)'}"
+        )
+        if not self.signer_coleta:
+            self._log(
+                "⚠ Sem ID de sinalizante: estas amostras entrarão no grupo 'desconhecido' e não "
+                "poderão ser usadas sozinhas para medir generalização cross-signer."
+            )
 
     def _parar_coleta(self):
         self.coletando = False
@@ -2268,7 +1940,7 @@ class LibrasApp(tk.Tk):
         if messagebox.askyesno("Confirmar", f"Deletar '{rot}' ({tipo})?"):
             self.dados.deletar_classe(tipo, rot)
             self.entry_del.delete(0, tk.END)
-            self.after(0, self._atualizar_classes)
+            self._atualizar_classes()
             self._log(f"🗑 Classe removida: {rot} ({tipo})")
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -2298,7 +1970,7 @@ class LibrasApp(tk.Tk):
         self.lbl_treino_status.configure(text="Treino finalizado")
 
     def _treinar_estatico(self):
-        rotulos_prioritarios, peso_local, min_amostras = self._config_treino_hibrido()
+        rotulos_prioritarios, peso_local = self._config_treino_hibrido()
 
         def job():
             try:
@@ -2310,7 +1982,6 @@ class LibrasApp(tk.Tk):
                     meta,
                     rotulos_prioritarios=rotulos_prioritarios,
                     peso_local=peso_local,
-                    min_amostras_por_classe=min_amostras,
                     log=lambda s: self.after(0, self._log, s),
                 )
                 self.after(0, self._log, r)
@@ -2327,7 +1998,7 @@ class LibrasApp(tk.Tk):
         threading.Thread(target=job, daemon=True).start()
 
     def _treinar_dinamico(self):
-        rotulos_prioritarios, peso_local, min_amostras = self._config_treino_hibrido()
+        rotulos_prioritarios, peso_local = self._config_treino_hibrido()
 
         ok_tf, status = verificar_tensorflow()
         if not ok_tf:
@@ -2346,7 +2017,6 @@ class LibrasApp(tk.Tk):
                     meta,
                     rotulos_prioritarios=rotulos_prioritarios,
                     peso_local=peso_local,
-                    min_amostras_por_classe=min_amostras,
                     log=lambda s: self.after(0, self._log, s),
                     progresso_epoca_cb=lambda ep, total, logs, eta: self.after(
                         0, self._set_progresso_treino, ep, total, logs, eta
@@ -2373,11 +2043,7 @@ class LibrasApp(tk.Tk):
         if modo in ("estatico", "ambos") and self.modelos.modelo_estatico is None:
             messagebox.showwarning("Aviso", "Treine o modelo estático primeiro.")
             return
-        tem_modelo_din = (
-            self.modelos.modelo_dinamico_rf is not None or
-            self.modelos.modelo_dinamico is not None
-        )
-        if modo in ("dinamico", "ambos") and not tem_modelo_din:
+        if modo in ("dinamico", "ambos") and self.modelos.modelo_dinamico is None:
             messagebox.showwarning("Aviso", "Treine o modelo dinâmico primeiro.")
             return
 
@@ -2385,7 +2051,6 @@ class LibrasApp(tk.Tk):
         self.hold_pred = ""
         self.hold_start = 0.0
         self.seq_rec = []
-        self.hand_was_visible = False
 
         self.btn_start_rec.configure(state=tk.DISABLED)
         self.btn_stop_rec.configure(state=tk.NORMAL)
@@ -2394,132 +2059,11 @@ class LibrasApp(tk.Tk):
 
     def _parar_rec(self):
         self.reconhecendo = False
-        self.ultimo_pred = ""
-        self.ultima_conf = 0.0
         self.btn_start_rec.configure(state=tk.NORMAL)
         self.btn_stop_rec.configure(state=tk.DISABLED)
         self.lbl_info.configure(text="⏹ Reconhecimento parado.", foreground=COR_YELLOW)
         self.lbl_pred.configure(text="—")
         self._log("⏹ Reconhecimento pausado")
-
-    def _iniciar_transcricao(self):
-        """Inicia modo transcrição (reconhecimento + texto em tempo real)."""
-        modo = self.var_modo_trans.get()
-        if modo in ("dinamico", "ambos") and self.modelos.modelo_dinamico_rf is None and self.modelos.X_train_dtw is None:
-            messagebox.showwarning("Aviso", "Treine o modelo dinâmico primeiro.")
-            return
-        if modo in ("estatico", "ambos") and self.modelos.modelo_estatico is None:
-            messagebox.showwarning("Aviso", "Treine o modelo estático primeiro.")
-            return
-
-        self.transcrição_ativa = True
-        self.transcrição_buffer = []
-        self.transcrição_timestamps = []
-
-        self.btn_trans_start.configure(state=tk.DISABLED)
-        self.btn_trans_stop.configure(state=tk.NORMAL)
-        self.txt_trans.configure(state=tk.NORMAL)
-        self.txt_trans.delete("1.0", tk.END)
-        self.txt_trans.configure(state=tk.DISABLED)
-
-        self._iniciar_rec()
-        self._log(f"✍️ Transcrição iniciada | modo={modo}")
-
-    def _parar_transcricao(self):
-        """Para transcrição e mostra resultado final."""
-        self.transcrição_ativa = False
-        self._parar_rec()
-
-        self.btn_trans_start.configure(state=tk.NORMAL)
-        self.btn_trans_stop.configure(state=tk.DISABLED)
-
-        self._log(f"✍️ Transcrição parada | {len(self.transcrição_buffer)} gestos capturados")
-
-    def _atualizar_transcricao(self, sinal, confianca):
-        """Atualiza texto de transcrição quando um sinal é reconhecido."""
-        if not self.transcrição_ativa:
-            return
-
-        self.transcrição_buffer.append(sinal)
-        self.transcrição_timestamps.append(datetime.now())
-
-        # Atualizar texto principal
-        self.txt_trans.configure(state=tk.NORMAL)
-        texto_atual = self.txt_trans.get("1.0", tk.END).strip()
-        novo_texto = (texto_atual + " " + sinal).strip()
-        self.txt_trans.delete("1.0", tk.END)
-        self.txt_trans.insert("1.0", novo_texto)
-        self.txt_trans.see(tk.END)
-        self.txt_trans.configure(state=tk.DISABLED)
-
-        # Atualizar histórico (últimos 10)
-        histórico = self.transcrição_buffer[-10:]
-        self.txt_historico.configure(state=tk.NORMAL)
-        self.txt_historico.delete("1.0", tk.END)
-        for i, (sig, ts) in enumerate(zip(histórico, self.transcrição_timestamps[-10:])):
-            timestamp_str = ts.strftime("%H:%M:%S")
-            self.txt_historico.insert(tk.END, f"{i+1}. [{timestamp_str}] {sig}\n")
-        self.txt_historico.configure(state=tk.DISABLED)
-
-    def _salvar_transcricao(self):
-        """Salva transcrição como arquivo de texto."""
-        if not self.transcrição_buffer:
-            messagebox.showwarning("Aviso", "Nenhuma transcrição para salvar.")
-            return
-
-        conteudo = " ".join(self.transcrição_buffer)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        arquivo = f"transcricao_{timestamp}.txt"
-
-        try:
-            with open(arquivo, "w", encoding="utf-8") as f:
-                f.write(f"Transcrição LIBRAS → Português\n")
-                f.write(f"Data/Hora: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"Gestos reconhecidos: {len(self.transcrição_buffer)}\n")
-                f.write("─" * 50 + "\n\n")
-                f.write(conteudo + "\n\n")
-                f.write("─" * 50 + "\n")
-                f.write("Histórico detalhado:\n")
-                for i, (sig, ts) in enumerate(zip(self.transcrição_buffer, self.transcrição_timestamps)):
-                    f.write(f"{i+1}. [{ts.strftime('%H:%M:%S')}] {sig}\n")
-
-            messagebox.showinfo("Sucesso", f"Transcrição salva em:\n{arquivo}")
-            self._log(f"💾 Transcrição salva: {arquivo}")
-        except Exception as e:
-            messagebox.showerror("Erro", f"Falha ao salvar: {e}")
-
-    def _limpar_transcricao(self):
-        """Limpa buffer de transcrição."""
-        if messagebox.askyesno("Confirmar", "Limpar transcrição?"):
-            self.transcrição_buffer = []
-            self.transcrição_timestamps = []
-            self.txt_trans.configure(state=tk.NORMAL)
-            self.txt_trans.delete("1.0", tk.END)
-            self.txt_trans.configure(state=tk.DISABLED)
-            self.txt_historico.configure(state=tk.NORMAL)
-            self.txt_historico.delete("1.0", tk.END)
-            self.txt_historico.configure(state=tk.DISABLED)
-            self._log("🗑 Transcrição limpa")
-
-    def _confirmar_pred_direta(self, pred, conf):
-        """Confirmação imediata para gestos dinâmicos (disparada ao fim do gesto)."""
-        self.ultimo_pred = pred
-        self.ultima_conf = conf
-        self._set_pred_label(pred, conf)
-        self.txt.insert(tk.END, pred + " ")
-        self.txt.see(tk.END)
-
-        # Atualizar transcrição se ativa
-        if self.transcrição_ativa:
-            self._atualizar_transcricao(pred, conf)
-
-        self.lbl_info.configure(
-            text=f"✅ Último gesto: {pred} ({conf:.0%})",
-            foreground=COR_GREEN
-        )
-        self.hold_pred = ""
-        self.hold_start = 0.0
-        self._debug(f"Gesto dinâmico confirmado: {pred} ({conf:.2%})")
 
     def _confirmar_pred(self, pred, conf):
         self._set_pred_label(pred, conf)
@@ -2529,18 +2073,10 @@ class LibrasApp(tk.Tk):
 
         if pred == self.hold_pred:
             if now - self.hold_start >= hold:
-                self.ultimo_pred = pred
-                self.ultima_conf = conf
-                self.txt.insert(tk.END, pred + " ")
+                self.txt.insert(tk.END, pred)
                 self.txt.see(tk.END)
-
-                # Atualizar transcrição se ativa
-                if self.transcrição_ativa:
-                    self._atualizar_transcricao(pred, conf)
-
                 self.hold_pred = ""
                 self.hold_start = 0.0
-                self.seq_rec.clear()
                 self._debug(f"Predição confirmada: {pred} ({conf:.2%})")
         else:
             self.hold_pred = pred
@@ -2552,30 +2088,45 @@ class LibrasApp(tk.Tk):
         else:
             self.lbl_pred.configure(text=pred, foreground=COR_FG)
 
-    def _restaurar_ultimo_pred(self):
-        """Mantém o último resultado visível quando não há gesto ativo."""
-        if self.ultimo_pred:
-            self._set_pred_label(self.ultimo_pred, self.ultima_conf)
-        else:
-            self.lbl_pred.configure(text="—", foreground=COR_FG)
-
     # ──────────────────────────────────────────────────────────────────────────
     # CÂMERA
     # ──────────────────────────────────────────────────────────────────────────
+    def _cb_download_hand(self, baixados, total, pct, velocidade):
+        def ui_update():
+            self.prog["maximum"] = 100
+            self.prog["value"] = min(max(pct, 0.0), 100.0)
+            if total > 0:
+                mb_b = baixados / (1024 * 1024)
+                mb_t = total / (1024 * 1024)
+                mb_s = velocidade / (1024 * 1024)
+                self.lbl_cam.configure(
+                    text=f"⬇ Baixando hand_landmarker.task... {pct:.1f}% ({mb_b:.1f}/{mb_t:.1f} MB) {mb_s:.2f} MB/s",
+                    foreground=COR_YELLOW,
+                )
+            else:
+                self.lbl_cam.configure(text=f"⬇ Baixando hand_landmarker.task... {baixados} bytes", foreground=COR_YELLOW)
+
+        self.after(0, ui_update)
+
     def _inicializar_detector(self):
         try:
-            self.lbl_cam.configure(text="🔎 Inicializando MediaPipe Holistic...", foreground=COR_YELLOW)
-            self._log("🔎 Inicializando MediaPipe Holistic (mãos + pose + rosto)...")
-            self.detector = DetectorHolistic(
+            self.lbl_cam.configure(text="🔎 Verificando hand_landmarker.task...", foreground=COR_YELLOW)
+            self._log("🔎 Verificando arquivo hand_landmarker.task...")
+            resultado = garantir_hand_landmarker(
+                HAND_LANDMARKER_FILE,
+                progress_cb=self._cb_download_hand,
+                log_fn=lambda s: self.after(0, self._log, s),
+            )
+
+            if resultado == "baixado":
+                self._log("✅ hand_landmarker.task baixado automaticamente.")
+
+            self.detector = DetectorMaos(
+                model_path=HAND_LANDMARKER_FILE,
                 debug=self.var_debug.get(),
                 log_fn=lambda s: self.after(0, self._log, s),
             )
-            # Aplica mão dominante da UI (pode já ter sido selecionada antes do detector existir)
-            if hasattr(self, "var_mao_dom"):
-                self.detector.mao_dominante = self.var_mao_dom.get()
-            self._log(f"✅ Holistic pronto — {TOTAL_FEATURES} features por frame "
-                      f"(mãos={FEATURES_MAOS}, pose={FEATURES_POSE}) | "
-                      f"mão dominante: {self.detector.mao_dominante}")
+            self.prog["value"] = 0
             return True
         except Exception as exc:
             self._log(f"❌ Falha ao inicializar detector: {exc}")
@@ -2616,77 +2167,27 @@ class LibrasApp(tk.Tk):
                 feats = self.detector.extrair_features(res)
                 frame = self.detector.desenhar(frame, res)
 
-                tem_mao = self.detector.tem_mao(res)
+                tem_mao = bool(res.hand_landmarks)
 
                 # COLETA
                 if self.coletando:
-                    if self.tipo_coleta == "estatico":
-                        # Estático: captura frame a frame enquanto há mão
-                        if tem_mao:
-                            self.dados.salvar_estatico(self.rotulo_coleta, feats)
+                    if tem_mao:
+                        if self.tipo_coleta == "estatico":
+                            self.dados.salvar_estatico(self.rotulo_coleta, feats, signer_id=self.signer_coleta)
                             self.amostras_coletadas += 1
-                            self.after(0, self._atualizar_progresso_overlay)
-                            if self.amostras_coletadas >= self.amostras_alvo:
-                                self.after(0, self._finalizar_coleta)
-                    else:
-                        # Dinâmico: segmentação automática com confirmação por ESPAÇO
-                        if self.seg_estado == "aguardando_espaco":
-                            pass  # aguarda tecla Espaço — tratado em _tecla_espaco
-
-                        elif self.seg_estado == "aguardando_mao":
-                            if tem_mao:
-                                self.seg_estado = "gravando"
+                        else:
+                            self.seq_buffer.append(feats)
+                            if len(self.seq_buffer) >= SEQUENCE_LENGTH:
+                                seq = np.array(self.seq_buffer[-SEQUENCE_LENGTH:], dtype=np.float32)
+                                if seq.shape[0] >= MIN_DYNAMIC_FRAMES:
+                                    self.dados.salvar_dinamico(self.rotulo_coleta, seq, signer_id=self.signer_coleta)
+                                    self.amostras_coletadas += 1
                                 self.seq_buffer = []
-                                self.seg_frames_sem_mao = 0
 
-                        elif self.seg_estado == "gravando":
-                            if tem_mao:
-                                self.seg_frames_sem_mao = 0
-                                self.seq_buffer.append(feats)
-                            else:
-                                self.seg_frames_sem_mao += 1
-                                if self.seg_frames_sem_mao >= self.SEG_FRAMES_PAUSA:
-                                    # Sinal terminou: VALIDA antes de salvar
-                                    seq = np.array(self.seq_buffer, dtype=np.float32)
+                        self.after(0, lambda: self._atualizar_progresso_overlay())
 
-                                    # VALIDAÇÃO DE QUALIDADE
-                                    valida, motivo, qualidade = self.modelos._validar_amostra_dinamica(seq)
-
-                                    if valida:
-                                        # CALCULA DIVERSIDADE
-                                        self.buffer_ultimas_amostras.append(seq.copy())
-                                        if len(self.buffer_ultimas_amostras) > 5:
-                                            self.buffer_ultimas_amostras.pop(0)
-
-                                        diversidade, alerta_div = self.modelos._calcular_diversidade(
-                                            self.buffer_ultimas_amostras
-                                        )
-
-                                        # SALVA
-                                        self.dados.salvar_dinamico(self.rotulo_coleta, seq)
-                                        self.amostras_coletadas += 1
-
-                                        # STATS
-                                        self.estatisticas_coleta["total_validas"] += 1
-                                        self.estatisticas_coleta["qualidades"].append(qualidade)
-                                        self.estatisticas_coleta["diversidades"].append(diversidade)
-
-                                        # FEEDBACK
-                                        self.after(0, lambda m=motivo, q=qualidade, d=diversidade, a=alerta_div:
-                                            self._log_validacao(m, q, d, a))
-                                        self.after(0, self._atualizar_progresso_overlay)
-
-                                        if self.amostras_coletadas >= self.amostras_alvo:
-                                            self.after(0, self._finalizar_coleta)
-                                    else:
-                                        # REJEITADA
-                                        self.estatisticas_coleta["total_rejeitadas"] += 1
-                                        self.after(0, lambda m=motivo, q=qualidade:
-                                            self._log(f"❌ Amostra rejeitada: {m} ({q:.0%})"))
-
-                                    self.seq_buffer = []
-                                    self.seg_estado = "aguardando_espaco"
-                                    self.seg_frames_sem_mao = 0
+                        if self.amostras_coletadas >= self.amostras_alvo:
+                            self.after(0, self._finalizar_coleta)
 
                 # RECONHECIMENTO
                 if self.reconhecendo:
@@ -2696,11 +2197,6 @@ class LibrasApp(tk.Tk):
                     pred, conf = None, 0.0
 
                     if tem_mao:
-                        # Mão apareceu agora: zera o buffer para começar gesto limpo
-                        if not self.hand_was_visible:
-                            self.seq_rec = []
-                        self.hand_was_visible = True
-
                         if modo in ("estatico", "ambos"):
                             p, c = self.modelos.prever_estatico(feats)
                             if p and c >= lim:
@@ -2708,61 +2204,35 @@ class LibrasApp(tk.Tk):
 
                         if modo in ("dinamico", "ambos"):
                             self.seq_rec.append(feats)
+                            if len(self.seq_rec) >= SEQUENCE_LENGTH:
+                                seq = np.array(self.seq_rec[-SEQUENCE_LENGTH:], dtype=np.float32)
+                                p, c = self.modelos.prever_dinamico(seq)
+                                if p and c >= lim and c > conf:
+                                    pred, conf = p, c
 
                         if pred:
                             self.after(0, lambda p=pred, c=conf: self._confirmar_pred(p, c))
                         else:
-                            self.after(0, self._restaurar_ultimo_pred)
+                            self.after(0, lambda: self._set_pred_label("...", 0.0))
 
                         if self.var_debug.get() and (time.time() - self.last_log_rec) > 2.0:
                             self.last_log_rec = time.time()
-                            self.after(0, self._log, f"[DEBUG] Reconhecendo | modo={modo} | frames={len(self.seq_rec)}")
-
+                            self.after(0, self._log, f"[DEBUG] Reconhecimento ativo | modo={modo} | seq_len={len(self.seq_rec)}")
                     else:
-                        # Mão saiu: se estava visível e temos frames suficientes → predizer agora
-                        fez_predicao = False
-                        if self.hand_was_visible and modo in ("dinamico", "ambos"):
-                            if len(self.seq_rec) >= MIN_DYNAMIC_FRAMES:
-                                seq = np.array(self.seq_rec[-SEQUENCE_LENGTH:], dtype=np.float32)
-                                p, c = self.modelos.prever_dinamico(seq)
-                                lim_din = max(0.15, lim * 0.4)
-                                if p and c >= lim_din:
-                                    self.after(0, lambda p=p, c=c: self._confirmar_pred_direta(p, c))
-                                    fez_predicao = True
-                                else:
-                                    self.after(0, lambda p=p, c=c: self._set_pred_label(f"{p}?", c))
-                                    fez_predicao = True
-                                if self.var_debug.get():
-                                    self.after(0, self._log, f"[DEBUG] Gesto: '{p}' ({c:.1%}) | {len(self.seq_rec)} frames")
-                            self.seq_rec = []
-
-                        self.hand_was_visible = False
-                        if not fez_predicao:
-                            self.after(0, self._restaurar_ultimo_pred)
+                        self.seq_rec = []
+                        self.after(0, lambda: self._set_pred_label("—", 0.0))
 
                 if self.coletando:
-                    if self.tipo_coleta == "estatico":
-                        cor = (0, 255, 0) if tem_mao else (0, 0, 255)
-                        texto = f"ESTATICO | {self.rotulo_coleta} | {self.amostras_coletadas}/{self.amostras_alvo}"
-                        cv2.putText(frame, texto, (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.75, cor, 2)
-                    else:
-                        # Dinâmico: overlay por estado
-                        h, w = frame.shape[:2]
-                        if self.seg_estado == "aguardando_espaco":
-                            cv2.rectangle(frame, (0, 0), (w-1, h-1), (200, 200, 0), 4)
-                            cv2.putText(frame, "Pressione ESPACO para gravar",
-                                        (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 220, 220), 2)
-                        elif self.seg_estado == "aguardando_mao":
-                            cv2.rectangle(frame, (0, 0), (w-1, h-1), (0, 200, 0), 4)
-                            cv2.putText(frame, "Mostre as maos e faca o sinal!",
-                                        (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 220, 0), 2)
-                        elif self.seg_estado == "gravando":
-                            cv2.rectangle(frame, (0, 0), (w-1, h-1), (0, 0, 220), 6)
-                            cv2.putText(frame, f"GRAVANDO  {len(self.seq_buffer)} frames",
-                                        (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                        cv2.putText(frame,
-                                    f"{self.rotulo_coleta}  {self.amostras_coletadas}/{self.amostras_alvo}",
-                                    (10, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
+                    color = (0, 255, 0) if tem_mao else (0, 0, 255)
+                    cv2.putText(
+                        frame,
+                        f"Coleta: {self.rotulo_coleta} ({self.tipo_coleta}) {self.amostras_coletadas}/{self.amostras_alvo}",
+                        (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.75,
+                        color,
+                        2,
+                    )
 
                 self.after(0, lambda fr=frame: self._exibir(fr))
                 time.sleep(0.02)
@@ -2824,7 +2294,7 @@ if __name__ == "__main__":
     print("TensorFlow:", status_tf)
     print("Dados:", DIR_DADOS)
     print("Modelos:", DIR_MODELOS)
-    print(f"Features: {TOTAL_FEATURES} (mãos={FEATURES_MAOS}, pose={FEATURES_POSE})")
+    print("Hand task:", HAND_LANDMARKER_FILE)
     print("=" * 70)
 
     app = LibrasApp()

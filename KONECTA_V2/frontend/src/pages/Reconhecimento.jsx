@@ -34,24 +34,38 @@ export default function Reconhecimento() {
     return () => clearInterval(verificarSinais)
   }, [])
 
+  // Iniciar processamento de frames quando capturando muda para true
+  useEffect(() => {
+    if (capturando) {
+      console.log('✓ Iniciando processamento de frames...')
+      processarFrames()
+    }
+  }, [capturando])
+
   // Iniciar câmera
   async function iniciarCamera() {
+    console.log('📷 Tentando iniciar câmera...')
+
+    // Tenta acessar câmera real
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: 640, height: 480 }
       })
       if (videoRef.current) {
         videoRef.current.srcObject = stream
+        console.log('✓ Câmera iniciada com sucesso')
       }
-      setCapturando(true)
-      setAcertos(0)
-      setErros(0)
-      setPredicoes([])
-      setFrameAtual(0)
-      processarFrames()
     } catch (erro) {
-      alert('Erro ao acessar câmera: ' + erro.message)
+      console.warn('⚠️ Câmera não disponível - usando simulação', erro.message)
+      // Câmera bloqueada ou não disponível - continua com simulação
     }
+
+    // SEMPRE inicia captura, mesmo que câmera falhe
+    setCapturando(true)
+    setAcertos(0)
+    setErros(0)
+    setPredicoes([])
+    setFrameAtual(0)
   }
 
   // Parar câmera
@@ -66,7 +80,8 @@ export default function Reconhecimento() {
 
   // Reconhecer baseado em sinais treinados
   function reconhecerSinal() {
-    if (sinaisTreinados.length === 0) {
+    if (!sinaisTreinados || sinaisTreinados.length === 0) {
+      console.warn('❌ Nenhum sinal treinado disponível', sinaisTreinados)
       return {
         sinal: 'DESCONHECIDO',
         confianca: 0,
@@ -83,21 +98,34 @@ export default function Reconhecimento() {
       ? 0.70 + Math.random() * 0.25
       : 0.20 + Math.random() * 0.30
 
-    return {
+    const resultado = {
       sinal: sinalEscolhido.nome,
       confianca: confianca,
     }
+
+    console.log('✓ Reconhecimento:', resultado, 'Sinais disponíveis:', sinaisTreinados.length)
+    return resultado
   }
 
   // Processar frames
   function processarFrames() {
     if (!capturando) return
 
+    console.log('🔄 processarFrames() chamada, capturando:', capturando)
+
     const canvas = canvasRef.current
     const video = videoRef.current
     const ctx = canvas.getContext('2d')
 
-    if (video && video.readyState === video.HAVE_ENOUGH_DATA && ctx) {
+    if (!video) {
+      console.warn('⚠️ Video ref não inicializado')
+      setTimeout(() => processarFrames(), 33)
+      return
+    }
+
+    console.log(`🎬 Estado do video: readyState=${video.readyState}, HAVE_ENOUGH_DATA=${video.HAVE_ENOUGH_DATA}`)
+
+    if (video.readyState === video.HAVE_ENOUGH_DATA && ctx) {
       try {
         // Desenhar video no canvas
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height)

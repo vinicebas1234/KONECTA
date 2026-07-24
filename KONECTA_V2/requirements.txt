@@ -1,0 +1,15 @@
+# Dependencias do KONECTA V2 (nucleo atual)
+numpy
+
+# AI Research Assistant (opcional nesta fase)
+anthropic
+
+# Etapas futuras (descomente conforme os motores forem implementados)
+# fastapi
+# uvicorn[standard]
+# websockets
+# mediapipe
+# opencv-python
+# torch
+# scikit-learn
+# pyyaml
