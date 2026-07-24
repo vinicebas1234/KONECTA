@@ -172,8 +172,8 @@ export default function Reconhecimento() {
       }
     }
 
-    // Próximo frame
-    setTimeout(() => processarFrames(), 33) // ~30 FPS
+    // Próximo frame (~5 FPS para melhor visualização)
+    setTimeout(() => processarFrames(), 200) // ~5 FPS
   }
 
   // Simular landmarks
