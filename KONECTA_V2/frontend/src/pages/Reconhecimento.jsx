@@ -23,6 +23,7 @@ export default function Reconhecimento() {
 
   // Buffer de landmarks para fazer predição (30 frames)
   const landmarksBufferRef = useRef([])
+  const capturandoRef = useRef(false)
 
   // Listar dispositivos de câmera disponíveis
   useEffect(() => {
@@ -63,6 +64,11 @@ export default function Reconhecimento() {
     return () => clearInterval(verificarSinais)
   }, [])
 
+  // Sincronizar capturandoRef com estado
+  useEffect(() => {
+    capturandoRef.current = capturando
+  }, [capturando])
+
   // Inicializar MediaPipe Hands
   useEffect(() => {
     const setupHands = async () => {
@@ -101,7 +107,7 @@ export default function Reconhecimento() {
 
   // Callback quando MediaPipe detecta landmarks
   const onHandsResults = (results) => {
-    if (!capturando) return
+    if (!capturandoRef.current) return
 
     try {
       const ctx = canvasRef.current?.getContext('2d')
@@ -178,8 +184,9 @@ export default function Reconhecimento() {
       }
 
       // Se não detectou mão, usar zeros
+      // CORREÇÃO: Array.fill() com array compartilha referência! Usar map().
       if (landmarks.length === 0) {
-        landmarks = Array(42).fill([0, 0, 0]) // 21 pontos x 2 mãos x 3 coords
+        landmarks = Array(42).fill(null).map(() => [0, 0, 0]) // 21 pontos x 2 mãos x 3 coords
       }
 
       // Adicionar ao buffer
@@ -201,7 +208,7 @@ export default function Reconhecimento() {
   // Fazer predição via API
   const fazerPredicao = async (landmarks) => {
     try {
-      const response = await fetch('http://localhost:8000/api/reconhecer', {
+      const response = await fetch('/api/reconhecer', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -216,7 +223,12 @@ export default function Reconhecimento() {
       const resultado = await response.json()
       console.log('✓ Reconhecimento:', resultado)
 
-      if (resultado.sinal && resultado.sinal !== 'DESCONHECIDO') {
+      // Filtrar apenas sinais treinados (A, B, C, D) com confiança mínima 30%
+      const sinaisValidos = ['A', 'B', 'C', 'D']
+      const sinalValido = sinaisValidos.includes(resultado.sinal)
+      const confiancaMinima = 0.30
+
+      if (sinalValido && resultado.confianca >= confiancaMinima && resultado.sinal !== 'DESCONHECIDO') {
         const novaPred = {
           frame: frameAtual,
           sinal: resultado.sinal,
@@ -366,11 +378,11 @@ export default function Reconhecimento() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* Câmera com Feedback Visual */}
+    <div className="space-y-4">
+      {/* Câmera + Stats lado a lado */}
       <div className="grid grid-cols-3 gap-4">
-        <div className="col-span-2 space-y-3">
-          {/* Câmera */}
+        {/* ESQUERDA: Câmera e Resultado */}
+        <div className="col-span-2">
           <div className="relative bg-black rounded-lg overflow-hidden aspect-video">
             <video
               ref={videoRef}
@@ -385,79 +397,70 @@ export default function Reconhecimento() {
               className="absolute inset-0 w-full h-full"
             />
 
-            {/* Overlay com Feedback */}
             {capturando && (
-              <div className="absolute inset-0 flex flex-col justify-between p-4">
-                <div className="flex justify-between">
-                  <div className="bg-black/60 text-white text-xs px-2 py-1 rounded">
-                    🔴 AO VIVO — Frame {frameAtual}
-                  </div>
-                  <div className="bg-black/60 text-white text-xs px-2 py-1 rounded">
-                    MediaPipe
-                  </div>
+              <div className="absolute inset-0 flex flex-col justify-between p-6">
+                {/* Frame counter no topo */}
+                <div className="text-white text-sm font-bold bg-black/70 px-3 py-1 rounded w-fit">
+                  Frame: {frameAtual}
                 </div>
 
-                {/* Mostrar feedback ou "Processando" */}
+                {/* Resultado no centro */}
                 {ultimaPredicao ? (
-                  <>
-                    {/* Resultado Grande e Colorido */}
-                    <motion.div
-                      key={ultimaPredicao.frame}
-                      initial={{ scale: 0.8, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      className={`
-                        text-center p-4 rounded-lg font-bold text-white text-3xl
-                        ${ultimaPredicao.confianca > 0.65
-                          ? 'bg-green-600/80'
-                          : ultimaPredicao.confianca > 0.45
-                          ? 'bg-yellow-600/80'
-                          : 'bg-red-600/80'
-                        }
-                      `}
-                    >
-                      <p>{ultimaPredicao.sinal}</p>
-                      <p className="text-lg mt-1">
-                        {(ultimaPredicao.confianca * 100).toFixed(0)}%
-                      </p>
-                    </motion.div>
-
-                    {/* Status */}
-                    <div className="bg-black/80 text-white text-sm p-3 rounded space-y-1 text-center">
-                      <p className="font-bold">
-                        {ultimaPredicao.confianca > 0.65
-                          ? '✅ CORRETO!'
-                          : ultimaPredicao.confianca > 0.45
-                          ? '⚠️ INCERTO'
-                          : '❌ ERRADO'}
-                      </p>
-                      <p className="text-xs">
-                        Acertos: {acertos} | Erros: {erros}
-                      </p>
-                    </div>
-                  </>
+                  <motion.div
+                    key={ultimaPredicao.frame}
+                    initial={{ scale: 0.8, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    className={`
+                      text-center p-6 rounded-lg font-bold text-white
+                      ${ultimaPredicao.confianca > 0.65
+                        ? 'bg-green-600/90'
+                        : ultimaPredicao.confianca > 0.45
+                        ? 'bg-yellow-600/90'
+                        : 'bg-red-600/90'
+                      }
+                    `}
+                  >
+                    <p className="text-5xl mb-2">{ultimaPredicao.sinal}</p>
+                    <p className="text-2xl">{(ultimaPredicao.confianca * 100).toFixed(0)}%</p>
+                    <p className="text-sm mt-2">
+                      {ultimaPredicao.confianca > 0.65
+                        ? '✅ CORRETO'
+                        : ultimaPredicao.confianca > 0.45
+                        ? '⚠️ INCERTO'
+                        : '❌ ERRADO'}
+                    </p>
+                  </motion.div>
                 ) : (
                   <div className="flex items-center justify-center h-full">
                     <motion.div
                       animate={{ scale: [1, 1.1, 1] }}
                       transition={{ repeat: Infinity, duration: 1 }}
-                      className="bg-black/80 text-white text-2xl font-bold p-6 rounded-lg"
+                      className="bg-black/80 text-white text-lg font-bold px-6 py-4 rounded-lg text-center"
                     >
-                      🔄 Aguardando landmarks...
+                      🔄 Aguardando...<br /><span className="text-sm">Faça um gesto</span>
                     </motion.div>
                   </div>
                 )}
+
+                {/* Placar embaixo */}
+                <div className="text-white text-sm font-bold bg-black/70 px-3 py-2 rounded text-center">
+                  ✅ {acertos} | ❌ {erros}
+                </div>
               </div>
             )}
           </div>
+        </div>
 
-          {/* Seleção de Câmera */}
+        {/* DIREITA: Controles e Stats */}
+        <div className="space-y-3">
+          {/* Câmera selection */}
           {dispositivos.length > 0 && !capturando && (
-            <div className="space-y-2">
-              <label className="text-xs font-semibold text-ink2">📹 Câmera</label>
+            <div>
+              <label className="text-xs font-semibold text-ink2">Câmera</label>
               <select
                 value={cameraEscolhida || ''}
                 onChange={(e) => setCameraEscolhida(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg bg-surface border border-white/20 text-ink text-sm"
+                className="w-full mt-1 px-2 py-1 rounded-lg bg-surface border border-white/20 text-ink text-xs"
               >
                 {dispositivos.map((device) => (
                   <option key={device.deviceId} value={device.deviceId}>
@@ -468,142 +471,56 @@ export default function Reconhecimento() {
             </div>
           )}
 
-          {/* Controles */}
-          <div className="flex gap-2">
-            {!capturando ? (
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={iniciarCamera}
-                className="flex-1 bg-serie hover:bg-serie/85 text-white font-medium py-2.5 rounded-lg transition-colors"
-              >
-                📹 Abrir Câmera
-              </motion.button>
-            ) : (
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={pararCamera}
-                className="flex-1 bg-critical hover:bg-critical/85 text-white font-medium py-2.5 rounded-lg transition-colors"
-              >
-                ⏹️ Parar
-              </motion.button>
-            )}
-          </div>
-        </div>
+          {/* Botão principal */}
+          {!capturando ? (
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={iniciarCamera}
+              className="w-full bg-serie hover:bg-serie/85 text-white font-bold py-3 rounded-lg transition-colors"
+            >
+              📹 Abrir Câmera
+            </motion.button>
+          ) : (
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={pararCamera}
+              className="w-full bg-critical hover:bg-critical/85 text-white font-bold py-3 rounded-lg transition-colors"
+            >
+              ⏹️ Parar
+            </motion.button>
+          )}
 
-        {/* Estatísticas */}
-        <div className="space-y-3">
-          <div className="bg-surface border border-white/10 rounded-lg p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-ink">📊 Estatísticas</h3>
-
-            {estatisticas && capturando ? (
-              <div className="space-y-2 text-xs text-ink2">
-                <div>
-                  <p className="text-muted">Frames processados</p>
-                  <p className="text-2xl font-bold text-ink">{estatisticas.frameTotal}</p>
-                </div>
-
-                <div>
-                  <p className="text-muted">Confiança média</p>
-                  <p className="text-2xl font-bold text-serie">
-                    {(estatisticas.confiancaMedia * 100).toFixed(1)}%
-                  </p>
-                </div>
-
-                <div>
-                  <p className="text-muted">Sinal atual</p>
-                  <p className="text-xl font-bold text-ink">
-                    {estatisticas.sinalMaisFrequente}
-                  </p>
-                </div>
-
-                <div className="pt-2 border-t border-white/10">
-                  <p className="text-muted mb-2">Acertos: {acertos}</p>
-                  <p className="text-muted">Erros: {erros}</p>
-                  {acertos + erros > 0 && (
-                    <p className="text-good font-bold mt-1">
-                      Taxa: {((acertos / (acertos + erros)) * 100).toFixed(0)}%
-                    </p>
-                  )}
-                </div>
+          {/* Stats */}
+          {capturando && estatisticas && (
+            <div className="bg-surface border border-white/10 rounded-lg p-3 space-y-2 text-xs">
+              <div className="text-center">
+                <p className="text-muted">Confiança Média</p>
+                <p className="text-2xl font-bold text-serie">
+                  {(estatisticas.confiancaMedia * 100).toFixed(0)}%
+                </p>
               </div>
-            ) : (
-              <p className="text-xs text-muted">Inicie a câmera para ver estatísticas</p>
-            )}
-          </div>
-        </div>
-      </div>
+            </div>
+          )}
 
-      {/* Sinais Disponíveis */}
-      {sinaisTreinados.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-good/10 border border-good/30 rounded-lg p-4"
-        >
-          <p className="text-sm font-semibold text-good mb-2">✓ Sinais Disponíveis para Teste</p>
-          <div className="flex flex-wrap gap-2">
-            {sinaisTreinados.map((sinal, idx) => (
-              <div
-                key={idx}
-                className="bg-good/20 text-good px-3 py-1 rounded-full text-sm font-medium"
-              >
-                {sinal.nome} ({(sinal.acuracia * 100).toFixed(0)}%)
+          {/* Sinais disponíveis */}
+          {sinaisTreinados.length > 0 && (
+            <div className="bg-good/10 border border-good/30 rounded-lg p-3">
+              <p className="text-xs font-semibold text-good mb-2">Sinais Treináveis:</p>
+              <div className="flex flex-wrap gap-1">
+                {sinaisTreinados.map((sinal, idx) => (
+                  <div
+                    key={idx}
+                    className="bg-good/30 text-good px-2 py-1 rounded text-xs font-medium"
+                  >
+                    {sinal.nome}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        </motion.div>
-      )}
-
-      {/* Histórico de Predicoes */}
-      {predicoes.length > 0 && (
-        <div className="bg-surface border border-white/10 rounded-lg p-4">
-          <h3 className="text-sm font-semibold text-ink mb-3">📋 Últimas Predições</h3>
-
-          <div className="max-h-48 overflow-y-auto space-y-2">
-            {predicoes.slice().reverse().slice(0, 10).map((pred, idx) => (
-              <motion.div
-                key={idx}
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                className={`
-                  flex items-center justify-between p-2.5 rounded text-xs font-medium
-                  ${pred.confianca > 0.65
-                    ? 'bg-green-500/20 text-green-300 border border-green-500/30'
-                    : pred.confianca > 0.45
-                    ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
-                    : 'bg-red-500/20 text-red-300 border border-red-500/30'
-                  }
-                `}
-              >
-                <span className="text-muted">Frame {pred.frame}</span>
-                <span>{pred.sinal}</span>
-                <span>
-                  {(pred.confianca * 100).toFixed(0)}%
-                </span>
-              </motion.div>
-            ))}
-          </div>
+            </div>
+          )}
         </div>
-      )}
-
-      {/* Instruções */}
-      <div className="bg-info/10 border border-info/30 rounded-lg p-4 text-sm text-ink2 space-y-2">
-        <p>💡 <strong>Como testar o reconhecimento:</strong></p>
-        <ol className="list-decimal list-inside space-y-1 ml-1">
-          <li>Abra "Treinar Sinais" e ensine um gesto (ex: A, B, 👍)</li>
-          <li>Volte aqui para "Reconhecimento"</li>
-          <li>Clique em "📹 Abrir Câmera"</li>
-          <li>Faça o gesto que aprendeu (30 frames = ~1-2 segundos)</li>
-          <li>Veja o resultado em GRANDE no vídeo:
-            <ul className="ml-4 mt-1 space-y-1">
-              <li>🟢 <strong>Verde</strong> = Correto (confiança &gt;65%)</li>
-              <li>🟡 <strong>Amarelo</strong> = Incerto (45-65%)</li>
-              <li>🔴 <strong>Vermelho</strong> = Errado (&lt;45%)</li>
-            </ul>
-          </li>
-        </ol>
       </div>
     </div>
   )
