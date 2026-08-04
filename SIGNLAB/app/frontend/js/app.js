@@ -186,7 +186,7 @@ async function renderHome() {
     <h2 class="section-title">Projetos recentes</h2>
     ${projects.length
       ? `<div class="project-list">${cards}</div>`
-      : '<div class="empty">Nenhum projeto ainda. Clique em “+ Novo projeto” para começar.</div>'}
+      : '<div class="empty">Nenhum projeto ainda. Clique em "+ Novo projeto" para começar.</div>'}
   `;
 }
 
@@ -363,9 +363,9 @@ function datasetAnalysis(modality) {
 
   classes.forEach((c, i) => {
     if (counts[i] === 0) {
-      items.push(['warn', '⚠', `A classe “${c.name}” não possui ${nounPl}.`]);
+      items.push(['warn', '⚠', `A classe "${c.name}" não possui ${nounPl}.`]);
     } else if (counts[i] < minSuggested) {
-      items.push(['warn', '⚠', `A classe “${c.name}” possui ${isVideo ? 'poucos' : 'poucas'} ${nounPl} (${counts[i]}). Sugestão: pelo menos ${minSuggested}.`]);
+      items.push(['warn', '⚠', `A classe "${c.name}" possui ${isVideo ? 'poucos' : 'poucas'} ${nounPl} (${counts[i]}). Sugestão: pelo menos ${minSuggested}.`]);
     }
   });
 
@@ -762,26 +762,26 @@ function testResultHtml() {
 function viewTest() {
   if (!state.experiments.length) {
     return `
-      <div class=”panel”>
+      <div class="panel">
         <h3>Teste</h3>
-        <p class=”note”>Nenhum modelo treinado ainda. Vá para a etapa
-           <b>02 — Treinamento</b> e clique em “⚡ Treinar modelo”.</p>
+        <p class="note">Nenhum modelo treinado ainda. Vá para a etapa
+           <b>02 — Treinamento</b> e clique em "⚡ Treinar modelo".</p>
       </div>`;
   }
   const exp = currentTestExp();
   const temporal = MODEL_MODALITY[exp.model_type] === 'video';
   const inputButtons = temporal
-    ? `<button class=”btn btn-ghost” data-action=”test-upload”>📁 Escolher vídeo</button>
-       <button class=”btn btn-ghost” data-action=”test-cam-open”>🎥 Gravar da webcam</button>
-       <button class=”btn btn-ghost” data-action=”test-cam-stream”>🎬 Reconhecimento contínuo</button>
-       <span class=”hint”>ou arraste um vídeo aqui</span>`
-    : `<button class=”btn btn-ghost” data-action=”test-upload”>📁 Escolher imagem</button>
-       <button class=”btn btn-ghost” data-action=”test-cam-open”>📷 Usar webcam</button>
-       <button class=”btn btn-ghost” data-action=”test-cam-stream”>🎬 Reconhecimento contínuo</button>
-       <span class=”hint”>ou arraste uma imagem aqui</span>`;
+    ? `<button class="btn btn-ghost" data-action="test-upload">📁 Escolher vídeo</button>
+       <button class="btn btn-ghost" data-action="test-cam-open">🎥 Gravar da webcam</button>
+       <button class="btn btn-ghost" data-action="test-cam-stream">🎬 Reconhecimento contínuo</button>
+       <span class="hint">ou arraste um vídeo aqui</span>`
+    : `<button class="btn btn-ghost" data-action="test-upload">📁 Escolher imagem</button>
+       <button class="btn btn-ghost" data-action="test-cam-open">📷 Usar webcam</button>
+       <button class="btn btn-ghost" data-action="test-cam-stream">🎬 Reconhecimento contínuo</button>
+       <span class="hint">ou arraste uma imagem aqui</span>`;
   const camButton = temporal
-    ? `<button class=”btn btn-primary” data-action=”test-cam-record”>⏺ Gravar sinal</button>`
-    : `<button class=”btn btn-primary” data-action=”test-cam-shot”>Capturar e reconhecer</button>`;
+    ? `<button class="btn btn-primary" data-action="test-cam-record">⏺ Gravar sinal</button>`
+    : `<button class="btn btn-primary" data-action="test-cam-shot">Capturar e reconhecer</button>`;
 
   return `
     <div class="panel">
