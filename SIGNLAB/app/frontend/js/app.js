@@ -828,43 +828,51 @@ function drawPredictionOnCanvas() {
   if (!top) return;
 
   // Desenhar landmarks das mãos se disponíveis
-  if (r.landmarks && r.landmarks.length > 0) {
-    ctx.strokeStyle = '#4f46e5';
-    ctx.fillStyle = '#4f46e5';
-    ctx.lineWidth = 2;
+  try {
+    if (r.landmarks && Array.isArray(r.landmarks) && r.landmarks.length > 0) {
+      ctx.strokeStyle = '#4f46e5';
+      ctx.fillStyle = '#4f46e5';
+      ctx.lineWidth = 2;
 
-    // Conectar keypoints (skeleton das mãos)
-    const connections = [
-      [0, 1], [1, 2], [2, 3], [3, 4],           // Polegar
-      [0, 5], [5, 6], [6, 7], [7, 8],           // Indicador
-      [0, 9], [9, 10], [10, 11], [11, 12],     // Médio
-      [0, 13], [13, 14], [14, 15], [15, 16],   // Anelar
-      [0, 17], [17, 18], [18, 19], [19, 20],   // Mínimo
-      [5, 9], [9, 13], [13, 17]                 // Conexões entre dedos
-    ];
+      // Conectar keypoints (skeleton das mãos)
+      const connections = [
+        [0, 1], [1, 2], [2, 3], [3, 4],           // Polegar
+        [0, 5], [5, 6], [6, 7], [7, 8],           // Indicador
+        [0, 9], [9, 10], [10, 11], [11, 12],     // Médio
+        [0, 13], [13, 14], [14, 15], [15, 16],   // Anelar
+        [0, 17], [17, 18], [18, 19], [19, 20],   // Mínimo
+        [5, 9], [9, 13], [13, 17]                 // Conexões entre dedos
+      ];
 
-    // Desenhar conexões
-    ctx.strokeStyle = 'rgba(79, 70, 229, 0.6)';
-    for (const [start, end] of connections) {
-      if (r.landmarks[start] && r.landmarks[end]) {
-        const p1 = r.landmarks[start];
-        const p2 = r.landmarks[end];
-        ctx.beginPath();
-        ctx.moveTo(p1[0] * canvas.width, p1[1] * canvas.height);
-        ctx.lineTo(p2[0] * canvas.width, p2[1] * canvas.height);
-        ctx.stroke();
+      // Desenhar conexões
+      ctx.strokeStyle = 'rgba(79, 70, 229, 0.6)';
+      for (const [start, end] of connections) {
+        if (r.landmarks[start] && r.landmarks[end]) {
+          const p1 = r.landmarks[start];
+          const p2 = r.landmarks[end];
+          if (p1.length >= 2 && p2.length >= 2) {
+            ctx.beginPath();
+            ctx.moveTo(p1[0] * canvas.width, p1[1] * canvas.height);
+            ctx.lineTo(p2[0] * canvas.width, p2[1] * canvas.height);
+            ctx.stroke();
+          }
+        }
+      }
+
+      // Desenhar pontos dos keypoints
+      ctx.fillStyle = '#4f46e5';
+      for (const point of r.landmarks) {
+        if (point && point.length >= 2) {
+          const x = point[0] * canvas.width;
+          const y = point[1] * canvas.height;
+          ctx.beginPath();
+          ctx.arc(x, y, 5, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
-
-    // Desenhar pontos dos keypoints
-    ctx.fillStyle = '#4f46e5';
-    for (const point of r.landmarks) {
-      const x = point[0] * canvas.width;
-      const y = point[1] * canvas.height;
-      ctx.beginPath();
-      ctx.arc(x, y, 5, 0, Math.PI * 2);
-      ctx.fill();
-    }
+  } catch (err) {
+    console.error('Erro ao desenhar landmarks:', err);
   }
 
   // Desenhar texto com classe e confiança (no topo, sem inversão)
