@@ -40,8 +40,9 @@ const api = (() => {
       return request('POST', `/api/classes/${classId}/examples`, form);
     },
 
-    startTrain: (projectId, modelType) =>
-      request('POST', `/api/projects/${projectId}/train`, { model_type: modelType }),
+    startTrain: (projectId, modelType, lsae) =>
+      request('POST', `/api/projects/${projectId}/train`,
+              { model_type: modelType, lsae }),
     trainStatus: (projectId) => request('GET', `/api/projects/${projectId}/train/status`),
     listExperiments: (projectId) => request('GET', `/api/projects/${projectId}/experiments`),
     predict: (experimentId, file) => {

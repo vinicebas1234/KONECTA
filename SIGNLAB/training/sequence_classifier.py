@@ -40,8 +40,13 @@ def build_model(model_type: str, seq_len: int, n_features: int, n_classes: int):
 
 
 def train(X: np.ndarray, y: np.ndarray, class_names: dict[int, str],
-          model_type: str = "bilstm") -> tuple[object, list[int], dict]:
-    """Treina e avalia. Retorna (modelo, labels na ordem do softmax, métricas)."""
+          model_type: str = "bilstm",
+          lsae_config=None) -> tuple[object, list[int], dict]:
+    """Treina e avalia. Retorna (modelo, labels na ordem do softmax, métricas).
+
+    O LSAE (se habilitado) é aplicado SOMENTE ao conjunto de treino,
+    depois do split — teste permanece original (regra anti data-leakage).
+    """
     import keras
 
     labels = sorted(class_names)
@@ -61,6 +66,13 @@ def train(X: np.ndarray, y: np.ndarray, class_names: dict[int, str],
     test_size = max(0.25, (len(labels) + 0.5) / len(y))
     X_train, X_test, y_train, y_test = train_test_split(
         X, y_idx, test_size=test_size, random_state=42, stratify=y_idx)
+
+    train_size_original = int(len(y_train))
+    lsae_applied = None
+    if lsae_config is not None and lsae_config.enabled:
+        from lsae.pipeline import augment_train_set
+        X_train, y_train, lsae_applied = augment_train_set(
+            X_train, y_train, lsae_config)
 
     started = time.time()
     keras.utils.set_random_seed(42)
@@ -98,7 +110,9 @@ def train(X: np.ndarray, y: np.ndarray, class_names: dict[int, str],
             "matrix": confusion_matrix(y_test, y_pred, labels=idx_all).tolist(),
         },
         "train_size": int(len(y_train)),
+        "train_size_original": train_size_original,
         "test_size": int(len(y_test)),
         "train_seconds": round(train_seconds, 2),
+        "lsae": lsae_applied.to_dict() if lsae_applied else {"enabled": False},
     }
     return model, labels, metrics

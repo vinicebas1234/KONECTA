@@ -395,6 +395,60 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 80px; }
 
 .train-cta { text-align: center; }
 
+/* ===== LSAE ===== */
+.lsae-panel {
+  border: 1.5px dashed var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-top: 20px;
+  transition: border-color .15s, background .15s;
+}
+.lsae-panel.on { border-color: var(--teal); background: var(--teal-soft); }
+.lsae-head { display: flex; flex-direction: column; gap: 4px; }
+.lsae-title { font-size: 15px; }
+.lsae-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--ink);
+}
+.lsae-check input { accent-color: var(--teal); }
+.lsae-controls { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.lsae-manual {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.lsae-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.lsae-field input[type="range"] { accent-color: var(--teal); width: 130px; }
+.lsae-field select {
+  font: inherit;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.lsae-manual :disabled { opacity: .45; }
+
+.lsae-badge {
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 3px 10px;
+  background: var(--bg);
+  color: var(--muted);
+}
+.lsae-badge.on { background: var(--teal-soft); color: var(--teal); }
+
 .train-controls {
   display: flex;
   align-items: center;

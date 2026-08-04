@@ -17,6 +17,10 @@ const state = {
   testRecorder: null,     // MediaRecorder do teste temporal
   pollTimer: null,
   training: false,
+  lsae: {                 // configuração do LSAE enviada ao treinar
+    enabled: false, auto: true, intensity: 0.5, factor: 3,
+    spatial: true, scale: true, noise: true, temporal: true,
+  },
 };
 
 const MODEL_LABELS = { rf: 'Random Forest', mlp: 'MLP', bilstm: 'BiLSTM', lstm: 'LSTM' };
@@ -377,7 +381,8 @@ function datasetAnalysis(modality) {
       !items.some(([type]) => type === 'warn')) {
     items.push(['ok', '✓', 'Dataset processável. Pronto para o treinamento.']);
   }
-  items.push(['info', '💡', 'O LSAE poderá aumentar a diversidade espacial e temporal deste dataset (Fase 4).']);
+  items.push(['info', '💡', 'Ative o LSAE abaixo para ampliar a diversidade ' +
+    (isVideo ? 'espacial e temporal' : 'espacial') + ' do treino com variações sintéticas.']);
 
   return items.map(([type, icon, text]) =>
     `<div class="analysis-item ${type}"><span>${icon}</span><span>${esc(text)}</span></div>`).join('');
@@ -406,11 +411,19 @@ function experimentHtml(exp, open = false) {
   const m = exp.metrics;
   const modelLabel = `${MODEL_MODALITY[exp.model_type] === 'video' ? '🎥' : '🖼'} ${MODEL_LABELS[exp.model_type]}`;
   const excluded = (exp.classes || []).filter(c => c.excluded);
+  const lsaeOn = m.lsae && m.lsae.enabled;
+  const lsaeBadge = lsaeOn
+    ? `<span class="lsae-badge on">LSAE ${m.lsae.factor}x</span>`
+    : '<span class="lsae-badge">LSAE OFF</span>';
+  const trainCell = lsaeOn && m.train_size_original
+    ? `${m.train_size_original} → ${m.train_size} / ${m.test_size}`
+    : `${m.train_size} / ${m.test_size}`;
   return `
     <details class="exp-item" ${open ? 'open' : ''}>
       <summary>
         <span class="exp-id">#${String(exp.id).padStart(3, '0')}</span>
         <span class="exp-model">${modelLabel}</span>
+        ${lsaeBadge}
         <span class="exp-date">${formatDate(exp.created_at)}</span>
         <span class="exp-metric">Accuracy <b>${pct(m.accuracy)}</b></span>
         <span class="exp-metric">F1 <b>${pct(m.f1)}</b></span>
@@ -422,7 +435,7 @@ function experimentHtml(exp, open = false) {
           <div class="metric"><span>Recall</span><b>${pct(m.recall)}</b></div>
           <div class="metric"><span>F1</span><b>${pct(m.f1)}</b></div>
           <div class="metric"><span>Qualidade dos landmarks</span><b>${pct(m.landmark_quality)}</b></div>
-          <div class="metric"><span>Treino / Teste</span><b>${m.train_size} / ${m.test_size}</b></div>
+          <div class="metric"><span>Treino${lsaeOn ? ' (orig. → LSAE)' : ''} / Teste</span><b>${trainCell}</b></div>
         </div>
         <h4>Métricas por classe</h4>
         <table class="per-class-table">
@@ -441,6 +454,46 @@ function experimentHtml(exp, open = false) {
         </div>
       </div>
     </details>`;
+}
+
+function lsaePanelHtml(isVideo) {
+  const l = state.lsae;
+  const manualDisabled = l.auto ? 'disabled' : '';
+  const controls = !l.enabled ? '' : `
+    <div class="lsae-controls">
+      <label class="lsae-check"><input type="checkbox" data-lsae="auto" ${l.auto ? 'checked' : ''}>
+        <span><b>Auto LSAE</b> — o sistema escolhe intensidade e quantidade</span></label>
+      <div class="lsae-manual">
+        <label class="lsae-field">Intensidade
+          <input type="range" data-lsae="intensity" min="10" max="100" step="5"
+                 value="${Math.round(l.intensity * 100)}" ${manualDisabled}>
+        </label>
+        <label class="lsae-field">Quantidade
+          <select data-lsae="factor" ${manualDisabled}>
+            ${[2, 3, 4, 5].map(f => `<option value="${f}" ${l.factor === f ? 'selected' : ''}>${f}x</option>`).join('')}
+          </select>
+        </label>
+        <label class="lsae-check"><input type="checkbox" data-lsae="spatial" ${l.spatial ? 'checked' : ''} ${manualDisabled}> Spatial (rotação)</label>
+        <label class="lsae-check"><input type="checkbox" data-lsae="scale" ${l.scale ? 'checked' : ''} ${manualDisabled}> Scale</label>
+        <label class="lsae-check"><input type="checkbox" data-lsae="noise" ${l.noise ? 'checked' : ''} ${manualDisabled}> Noise</label>
+        ${isVideo ? `<label class="lsae-check"><input type="checkbox" data-lsae="temporal" ${l.temporal ? 'checked' : ''} ${manualDisabled}> Temporal (ritmo)</label>` : ''}
+      </div>
+      <p class="hint">O LSAE é aplicado somente ao conjunto de treino, depois do split —
+         teste e validação permanecem originais (anti data-leakage).</p>
+    </div>`;
+
+  return `
+    <div class="lsae-panel ${l.enabled ? 'on' : ''}">
+      <div class="lsae-head">
+        <label class="lsae-check lsae-title">
+          <input type="checkbox" data-lsae="enabled" ${l.enabled ? 'checked' : ''}>
+          <span><b>LSAE</b> — Libras Semantic Augmentation Engine</span>
+        </label>
+        <span class="hint">Gera variações plausíveis dos landmarks
+          (rotação, escala, ruído${isVideo ? ', ritmo' : ''}) para ampliar a diversidade do treino.</span>
+      </div>
+      ${controls}
+    </div>`;
 }
 
 function viewTraining() {
@@ -483,6 +536,7 @@ function viewTraining() {
       </div>
       <p class="note">${description}</p>
       <div class="analysis">${datasetAnalysis(state.trainModality)}</div>
+      ${lsaePanelHtml(isVideo)}
       <div class="train-controls">
         <div class="model-choice">${radios}</div>
         <div class="train-cta">
@@ -816,7 +870,7 @@ $app.addEventListener('click', async e => {
 
     } else if (action === 'train') {
       const modelType = document.querySelector('input[name="model-type"]:checked').value;
-      await api.startTrain(state.project.id, modelType);
+      await api.startTrain(state.project.id, modelType, state.lsae);
       state.training = true;
       renderTab();
       pollTraining(state.project.id);
@@ -855,6 +909,15 @@ $app.addEventListener('change', e => {
     state.testResult = null;
     stopTestCam();
     renderTab();  // os controles mudam conforme a modalidade do experimento
+    return;
+  }
+  const lsaeInput = e.target.closest('[data-lsae]');
+  if (lsaeInput) {
+    const key = lsaeInput.dataset.lsae;
+    if (key === 'intensity') state.lsae.intensity = Number(lsaeInput.value) / 100;
+    else if (key === 'factor') state.lsae.factor = Number(lsaeInput.value);
+    else state.lsae[key] = lsaeInput.checked;
+    renderTab();  // atualiza visibilidade/estado dos controles
   }
 });
 

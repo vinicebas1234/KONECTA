@@ -31,8 +31,20 @@ MODEL_LOCK = threading.Lock()
 MODALITY = {"rf": "image", "mlp": "image", "bilstm": "video", "lstm": "video"}
 
 
+class LsaeIn(BaseModel):
+    enabled: bool = False
+    auto: bool = True
+    intensity: float = 0.5
+    factor: int = 3
+    spatial: bool = True
+    scale: bool = True
+    noise: bool = True
+    temporal: bool = True
+
+
 class TrainIn(BaseModel):
     model_type: str = "rf"
+    lsae: LsaeIn = LsaeIn()
 
 
 def experiment_dict(row: sqlite3.Row) -> dict:
@@ -126,7 +138,8 @@ def _save_experiment(db, project, model_type: str, metrics: dict,
     return exp_id
 
 
-def _train_image(db, job, project, project_id: int, model_type: str) -> int:
+def _train_image(db, job, project, project_id: int, model_type: str,
+                 lsae_config) -> int:
     from vision.features import FEATURE_CONFIG, feature_vector
     from training import image_classifier
 
@@ -161,7 +174,8 @@ def _train_image(db, job, project, project_id: int, model_type: str) -> int:
 
     job.update(state="training", message=None)
     class_names = {cid: s["name"] for cid, s in usable.items()}
-    model, metrics = image_classifier.train(X, y, class_names, model_type)
+    model, metrics = image_classifier.train(X, y, class_names, model_type,
+                                            lsae_config=lsae_config)
 
     total = sum(s["examples"] for s in class_stats.values())
     valid = sum(s["valid"] for s in class_stats.values())
@@ -179,7 +193,8 @@ def _train_image(db, job, project, project_id: int, model_type: str) -> int:
                             classes_info, FEATURE_CONFIG, save_model)
 
 
-def _train_video(db, job, project, project_id: int, model_type: str) -> int:
+def _train_video(db, job, project, project_id: int, model_type: str,
+                 lsae_config) -> int:
     from vision.features import FEATURE_CONFIG
     from vision.video import DEFAULT_SEQUENCE_LENGTH
     from training import sequence_classifier
@@ -218,7 +233,7 @@ def _train_video(db, job, project, project_id: int, model_type: str) -> int:
     job.update(state="training", message=None)
     class_names = {cid: s["name"] for cid, s in usable.items()}
     model, labels, metrics = sequence_classifier.train(
-        X, y, class_names, model_type)
+        X, y, class_names, model_type, lsae_config=lsae_config)
 
     metrics["landmark_quality"] = round(
         float(np.mean([q for q, m in zip(qualities, mask) if m])), 4)
@@ -242,7 +257,7 @@ def _train_video(db, job, project, project_id: int, model_type: str) -> int:
                             classes_info, feature_config, save_model)
 
 
-def run_training(project_id: int, model_type: str) -> None:
+def run_training(project_id: int, model_type: str, lsae_config) -> None:
     job = JOBS[project_id]
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
@@ -250,9 +265,11 @@ def run_training(project_id: int, model_type: str) -> None:
         project = dict(db.execute(
             "SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone())
         if MODALITY[model_type] == "video":
-            exp_id = _train_video(db, job, project, project_id, model_type)
+            exp_id = _train_video(db, job, project, project_id, model_type,
+                                  lsae_config)
         else:
-            exp_id = _train_image(db, job, project, project_id, model_type)
+            exp_id = _train_image(db, job, project, project_id, model_type,
+                                  lsae_config)
         job.update(state="done", experiment_id=exp_id)
     except ValueError as err:
         job.update(state="error", message=str(err))
@@ -277,8 +294,11 @@ def start_training(project_id: int, body: TrainIn,
         JOBS[project_id] = {"state": "extracting", "done": 0, "total": 0,
                             "message": None, "experiment_id": None}
 
+    from lsae.pipeline import LsaeConfig
+    lsae_config = LsaeConfig(**body.lsae.model_dump())
     thread = threading.Thread(target=run_training,
-                              args=(project_id, body.model_type), daemon=True)
+                              args=(project_id, body.model_type, lsae_config),
+                              daemon=True)
     thread.start()
     return {"started": True}
 
