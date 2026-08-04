@@ -746,6 +746,102 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 80px; }
 
 .loading { text-align: center; color: var(--muted); padding: 60px 0; }
 
+/* ===== Comparação de Experimentos ===== */
+.comparison-controls {
+  display: flex;
+  gap: 16px;
+  margin: 20px 0;
+  flex-wrap: wrap;
+}
+.comparison-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--muted);
+}
+.comparison-controls select {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 24px;
+  margin: 20px 0;
+}
+.comparison-exp {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+}
+.comparison-exp h4 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  color: var(--ink);
+}
+.exp-type {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.exp-type .lsae-badge {
+  display: inline-block;
+  margin-left: 6px;
+}
+
+.metrics-table, .delta-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 8px;
+}
+.metrics-table tr, .delta-table tr {
+  border-bottom: 1px solid var(--line);
+}
+.metrics-table td, .delta-table td {
+  padding: 8px 0;
+  text-align: left;
+}
+.metrics-table td:last-child, .delta-table td:last-child {
+  text-align: right;
+}
+.metrics-table b { color: var(--ink); }
+
+.delta-up {
+  color: var(--teal);
+  font-weight: 600;
+  font-size: 12px;
+}
+.delta-down {
+  color: var(--danger);
+  font-weight: 600;
+  font-size: 12px;
+}
+.delta-neutral {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.comparison-delta {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 16px;
+}
+.comparison-delta h4 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  color: var(--accent-ink);
+}
+
 @media (max-width: 640px) {
   .brand-tag { display: none; }
   main { padding: 20px 14px 60px; }

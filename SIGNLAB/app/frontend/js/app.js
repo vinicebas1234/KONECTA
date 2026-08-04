@@ -225,8 +225,9 @@ function renderProject() {
   const tabs = [
     ['exemplos', '01', 'Exemplos'],
     ['treino', '02', 'Treinamento'],
-    ['teste', '03', 'Teste'],
-    ['exportar', '04', 'Exportar'],
+    ['analise', '03', 'Análise'],
+    ['teste', '04', 'Teste'],
+    ['exportar', '05', 'Exportar'],
   ];
 
   $app.innerHTML = `
@@ -255,6 +256,7 @@ function renderTab() {
   if (!container) return;
   if (state.tab === 'exemplos') container.innerHTML = viewExamples();
   else if (state.tab === 'treino') container.innerHTML = viewTraining();
+  else if (state.tab === 'analise') container.innerHTML = viewAnalysis();
   else if (state.tab === 'teste') container.innerHTML = viewTest();
   else container.innerHTML = viewExport();
 }
@@ -594,7 +596,123 @@ async function pollTraining(projectId) {
   state.pollTimer = setTimeout(() => pollTraining(projectId), 700);
 }
 
-/* ===== Aba 03 — Teste ===== */
+/* ===== Aba 03 — Análise de Experimentos ===== */
+function updateComparisonDisplay() {
+  const selA = document.querySelector('[data-role="exp-a"]');
+  const selB = document.querySelector('[data-role="exp-b"]');
+  const cont = document.querySelector('.comparison-container');
+  if (!selA || !selB || !cont) return;
+
+  const idA = Number(selA.value), idB = Number(selB.value);
+  if (!idA || !idB || idA === idB) {
+    cont.innerHTML = '<p class="note">ℹ Selecione 2 experimentos diferentes para comparar.</p>';
+    return;
+  }
+
+  const expA = state.experiments.find(e => e.id === idA);
+  const expB = state.experiments.find(e => e.id === idB);
+  if (!expA || !expB) {
+    cont.innerHTML = '<p class="note">Experimentos não encontrados.</p>';
+    return;
+  }
+
+  cont.innerHTML = comparisonTableHtml(expA, expB);
+}
+
+function viewAnalysis() {
+  if (!state.experiments.length) {
+    return `<div class="panel"><h3>Análise</h3>
+      <p class="note">⚠ Nenhum experimento disponível. Treine um modelo na aba anterior.</p></div>`;
+  }
+
+  const exp1 = state.experiments[0];
+  const exp2 = state.experiments[1] || state.experiments[0];
+
+  const html = `<div class="panel">
+    <h3>Análise de Experimentos</h3>
+    <div class="comparison-controls">
+      <label>Experimento A:
+        <select data-role="exp-a" onchange="updateComparisonDisplay()">
+          ${state.experiments.map(e => `<option value="${e.id}" ${e.id === exp1.id ? 'selected' : ''}>#${String(e.id).padStart(3, '0')} (${MODEL_LABELS[e.model_type]}, acc ${pct(e.metrics.accuracy)})</option>`).join('')}
+        </select>
+      </label>
+      <label>Experimento B:
+        <select data-role="exp-b" onchange="updateComparisonDisplay()">
+          ${state.experiments.map(e => `<option value="${e.id}" ${e.id === exp2.id ? 'selected' : ''}>#${String(e.id).padStart(3, '0')} (${MODEL_LABELS[e.model_type]}, acc ${pct(e.metrics.accuracy)})</option>`).join('')}
+        </select>
+      </label>
+    </div>
+    <div class="comparison-container"></div>
+  </div>`;
+
+  setTimeout(updateComparisonDisplay, 10);
+  return html;
+}
+
+function comparisonTableHtml(expA, expB) {
+  const mA = expA.metrics, mB = expB.metrics;
+  const delta = (a, b) => {
+    const d = b - a;
+    if (Math.abs(d) < 0.001) return '<span class="delta-neutral">≈</span>';
+    return d > 0 ? `<span class="delta-up">↑${pct(Math.abs(d))}</span>` : `<span class="delta-down">↓${pct(Math.abs(d))}</span>`;
+  };
+
+  return `
+    <div class="comparison-grid">
+      <div class="comparison-exp">
+        <h4>#${String(expA.id).padStart(3, '0')}</h4>
+        <p class="exp-type">${MODEL_MODALITY[expA.model_type] === 'video' ? '🎥' : '🖼'} ${MODEL_LABELS[expA.model_type]}</p>
+        ${expA.metrics.lsae.enabled ? `<p class="lsae-badge on">LSAE ${expA.metrics.lsae.factor}x</p>` : '<p class="lsae-badge">LSAE OFF</p>'}
+        <table class="metrics-table">
+          <tr><td>Accuracy</td><td><b>${pct(mA.accuracy)}</b></td></tr>
+          <tr><td>Precision</td><td><b>${pct(mA.precision)}</b></td></tr>
+          <tr><td>Recall</td><td><b>${pct(mA.recall)}</b></td></tr>
+          <tr><td>F1</td><td><b>${pct(mA.f1)}</b></td></tr>
+          <tr><td>Treino / Teste</td><td><b>${mA.train_size} / ${mA.test_size}</b></td></tr>
+          <tr><td>Tempo</td><td><b>${mA.train_seconds}s</b></td></tr>
+        </table>
+      </div>
+
+      <div class="comparison-delta">
+        <h4>Diferenças</h4>
+        <table class="delta-table">
+          <tr><td>Accuracy</td><td>${delta(mA.accuracy, mB.accuracy)}</td></tr>
+          <tr><td>Precision</td><td>${delta(mA.precision, mB.precision)}</td></tr>
+          <tr><td>Recall</td><td>${delta(mA.recall, mB.recall)}</td></tr>
+          <tr><td>F1</td><td>${delta(mA.f1, mB.f1)}</td></tr>
+        </table>
+      </div>
+
+      <div class="comparison-exp">
+        <h4>#${String(expB.id).padStart(3, '0')}</h4>
+        <p class="exp-type">${MODEL_MODALITY[expB.model_type] === 'video' ? '🎥' : '🖼'} ${MODEL_LABELS[expB.model_type]}</p>
+        ${expB.metrics.lsae.enabled ? `<p class="lsae-badge on">LSAE ${expB.metrics.lsae.factor}x</p>` : '<p class="lsae-badge">LSAE OFF</p>'}
+        <table class="metrics-table">
+          <tr><td>Accuracy</td><td><b>${pct(mB.accuracy)}</b></td></tr>
+          <tr><td>Precision</td><td><b>${pct(mB.precision)}</b></td></tr>
+          <tr><td>Recall</td><td><b>${pct(mB.recall)}</b></td></tr>
+          <tr><td>F1</td><td><b>${pct(mB.f1)}</b></td></tr>
+          <tr><td>Treino / Teste</td><td><b>${mB.train_size} / ${mB.test_size}</b></td></tr>
+          <tr><td>Tempo</td><td><b>${mB.train_seconds}s</b></td></tr>
+        </table>
+      </div>
+    </div>
+
+    <h4 style="margin-top: 2em;">Matrizes de Confusão</h4>
+    <div class="comparison-grid">
+      <div>
+        <h5>#${String(expA.id).padStart(3, '0')}</h5>
+        ${confusionHtml(mA.confusion)}
+      </div>
+      <div>
+        <h5>#${String(expB.id).padStart(3, '0')}</h5>
+        ${confusionHtml(mB.confusion)}
+      </div>
+    </div>
+  `;
+}
+
+/* ===== Aba 04 — Teste ===== */
 function currentTestExp() {
   return state.experiments.find(e => e.id === state.testExpId) || state.experiments[0];
 }
