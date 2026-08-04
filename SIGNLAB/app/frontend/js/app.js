@@ -796,6 +796,7 @@ function viewTest() {
       <div id="test-cam" class="test-cam" hidden>
         <div class="webcam-stage">
           <video autoplay playsinline muted></video>
+          <canvas id="recognition-canvas" class="recognition-canvas"></canvas>
           <span class="rec-dot">REC</span>
         </div>
         ${getCameraSelectorHtml()}
@@ -808,11 +809,65 @@ function viewTest() {
     </div>`;
 }
 
+function drawPredictionOnCanvas() {
+  const canvas = document.getElementById('recognition-canvas');
+  const video = canvas?.parentElement?.querySelector('video');
+  if (!canvas || !video || !state.testResult) return;
+
+  const ctx = canvas.getContext('2d');
+  canvas.width = video.offsetWidth;
+  canvas.height = video.offsetHeight;
+
+  // Limpar canvas
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const r = state.testResult;
+  if (!r || r.loading) return;
+
+  const top = r.predictions[0];
+  if (!top) return;
+
+  // Desenhar bounding box (70% do vídeo centralizado)
+  const boxWidth = canvas.width * 0.7;
+  const boxHeight = canvas.height * 0.7;
+  const boxX = (canvas.width - boxWidth) / 2;
+  const boxY = (canvas.height - boxHeight) / 2;
+
+  // Estilo do bounding box
+  ctx.strokeStyle = '#4f46e5';
+  ctx.lineWidth = 3;
+  ctx.fillStyle = 'rgba(79, 70, 229, 0.1)';
+  ctx.fillRect(boxX, boxY, boxWidth, boxHeight);
+  ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
+
+  // Desenhar texto com classe e confiança
+  const text = `${top.class} - ${pct(top.prob)}`;
+  ctx.fillStyle = '#4f46e5';
+  ctx.font = 'bold 20px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Fundo para o texto
+  const metrics = ctx.measureText(text);
+  const textWidth = metrics.width;
+  const textHeight = 28;
+  const textX = canvas.width / 2;
+  const textY = boxY - 20;
+
+  ctx.fillStyle = 'rgba(79, 70, 229, 0.9)';
+  ctx.fillRect(textX - textWidth / 2 - 8, textY - textHeight / 2, textWidth + 16, textHeight);
+
+  // Texto
+  ctx.fillStyle = 'white';
+  ctx.fillText(text, textX, textY);
+}
+
 async function runPrediction(file) {
   if (!state.testExpId) return;
   state.testResult = { loading: true };
   const box = document.getElementById('test-result');
   if (box) box.innerHTML = testResultHtml();
+  drawPredictionOnCanvas();
   try {
     state.testResult = await api.predict(state.testExpId, file);
   } catch (err) {
@@ -821,6 +876,7 @@ async function runPrediction(file) {
   }
   const box2 = document.getElementById('test-result');
   if (box2) box2.innerHTML = testResultHtml();
+  drawPredictionOnCanvas();
 }
 
 async function listAvailableCameras() {
@@ -968,6 +1024,7 @@ async function startContinuousRecognition() {
         api.predict(state.testExpId, new File([blob], 'stream_frame.jpg'))
           .then(result => {
             state.testResult = result;
+            drawPredictionOnCanvas();
             const pred = document.getElementById('stream-predictions');
             if (pred && result.predictions && result.predictions.length) {
               const top = result.predictions[0];
