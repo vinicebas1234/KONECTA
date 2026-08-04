@@ -762,24 +762,26 @@ function testResultHtml() {
 function viewTest() {
   if (!state.experiments.length) {
     return `
-      <div class="panel">
+      <div class=”panel”>
         <h3>Teste</h3>
-        <p class="note">Nenhum modelo treinado ainda. Vá para a etapa
+        <p class=”note”>Nenhum modelo treinado ainda. Vá para a etapa
            <b>02 — Treinamento</b> e clique em “⚡ Treinar modelo”.</p>
       </div>`;
   }
   const exp = currentTestExp();
   const temporal = MODEL_MODALITY[exp.model_type] === 'video';
   const inputButtons = temporal
-    ? `<button class="btn btn-ghost" data-action="test-upload">📁 Escolher vídeo</button>
-       <button class="btn btn-ghost" data-action="test-cam-open">🎥 Gravar da webcam</button>
-       <span class="hint">ou arraste um vídeo aqui</span>`
-    : `<button class="btn btn-ghost" data-action="test-upload">📁 Escolher imagem</button>
-       <button class="btn btn-ghost" data-action="test-cam-open">📷 Usar webcam</button>
-       <span class="hint">ou arraste uma imagem aqui</span>`;
+    ? `<button class=”btn btn-ghost” data-action=”test-upload”>📁 Escolher vídeo</button>
+       <button class=”btn btn-ghost” data-action=”test-cam-open”>🎥 Gravar da webcam</button>
+       <button class=”btn btn-ghost” data-action=”test-cam-stream”>🎬 Reconhecimento contínuo</button>
+       <span class=”hint”>ou arraste um vídeo aqui</span>`
+    : `<button class=”btn btn-ghost” data-action=”test-upload”>📁 Escolher imagem</button>
+       <button class=”btn btn-ghost” data-action=”test-cam-open”>📷 Usar webcam</button>
+       <button class=”btn btn-ghost” data-action=”test-cam-stream”>🎬 Reconhecimento contínuo</button>
+       <span class=”hint”>ou arraste uma imagem aqui</span>`;
   const camButton = temporal
-    ? `<button class="btn btn-primary" data-action="test-cam-record">⏺ Gravar sinal</button>`
-    : `<button class="btn btn-primary" data-action="test-cam-shot">Capturar e reconhecer</button>`;
+    ? `<button class=”btn btn-primary” data-action=”test-cam-record”>⏺ Gravar sinal</button>`
+    : `<button class=”btn btn-primary” data-action=”test-cam-shot”>Capturar e reconhecer</button>`;
 
   return `
     <div class="panel">
@@ -844,6 +846,61 @@ function shootTestCam() {
   canvas.toBlob(blob => {
     if (blob) runPrediction(new File([blob], 'webcam_teste.jpg'));
   }, 'image/jpeg', 0.92);
+}
+
+async function startContinuousRecognition() {
+  const wrap = document.getElementById('test-cam');
+  if (!wrap) return;
+
+  try {
+    if (!state.testStream) {
+      state.testStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480 }, audio: false,
+      });
+    }
+  } catch (err) {
+    toast('Não foi possível acessar a webcam: ' + err.message, 'error');
+    return;
+  }
+
+  wrap.hidden = false;
+  const video = wrap.querySelector('video');
+  if (!video) return;
+  video.srcObject = state.testStream;
+
+  // Renderizar UI de streaming
+  const actions = wrap.querySelector('.test-cam-actions');
+  if (actions) {
+    actions.innerHTML = `
+      <button class="btn btn-primary" data-action="test-stream-stop">⏹ Parar reconhecimento</button>
+      <div id="stream-predictions" class="stream-predictions"></div>`;
+  }
+
+  // Iniciar polling de frames
+  state.streamInterval = setInterval(async () => {
+    if (!state.testStream || video.paused) {
+      clearInterval(state.streamInterval);
+      return;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    canvas.toBlob(blob => {
+      if (blob && state.testExpId) {
+        api.predict(state.testExpId, new File([blob], 'stream_frame.jpg'))
+          .then(result => {
+            state.testResult = result;
+            const pred = document.getElementById('stream-predictions');
+            if (pred && result.predictions && result.predictions.length) {
+              const top = result.predictions[0];
+              pred.innerHTML = `<div class="stream-top"><span>${esc(top.class)}</span> <b>${pct(top.prob)}</b></div>`;
+            }
+          })
+          .catch(() => {});
+      }
+    }, 'image/jpeg', 0.85);
+  }, 1000); // 1 frame por segundo
 }
 
 function toggleTestRecording(button) {
@@ -1014,6 +1071,16 @@ $app.addEventListener('click', async e => {
       stopTestCam();
       const wrap = document.getElementById('test-cam');
       if (wrap) wrap.hidden = true;
+
+    } else if (action === 'test-cam-stream') {
+      startContinuousRecognition();
+
+    } else if (action === 'test-stream-stop') {
+      clearInterval(state.streamInterval);
+      stopTestCam();
+      const wrap = document.getElementById('test-cam');
+      if (wrap) wrap.hidden = true;
+      toast('Reconhecimento contínuo encerrado.', 'success');
     }
   } catch (err) {
     toast(err.message, 'error');

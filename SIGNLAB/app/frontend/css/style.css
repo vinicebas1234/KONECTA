@@ -842,6 +842,30 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 80px; }
   color: var(--accent-ink);
 }
 
+/* ===== Reconhecimento Contínuo ===== */
+.stream-predictions {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--teal-soft);
+  border-radius: 10px;
+  text-align: center;
+}
+.stream-top {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  font-size: 18px;
+}
+.stream-top span {
+  font-weight: 600;
+  color: var(--teal);
+}
+.stream-top b {
+  font-size: 24px;
+  color: var(--teal);
+}
+
 @media (max-width: 640px) {
   .brand-tag { display: none; }
   main { padding: 20px 14px 60px; }
