@@ -859,6 +859,17 @@ async function openTestCam() {
   // Atualizar lista de câmeras se ainda não carregou
   if (state.availableCameras.length === 0) {
     await listAvailableCameras();
+    // Se houver múltiplas câmeras, re-renderizar para mostrar o seletor
+    if (state.availableCameras.length > 1) {
+      const newHtml = getCameraSelectorHtml();
+      const existingSelector = wrap.querySelector('.camera-selector');
+      if (newHtml && !existingSelector) {
+        const actionsDiv = wrap.querySelector('.test-cam-actions');
+        if (actionsDiv) {
+          actionsDiv.insertAdjacentHTML('beforebegin', newHtml);
+        }
+      }
+    }
   }
 
   try {
@@ -899,6 +910,17 @@ async function startContinuousRecognition() {
   // Atualizar lista de câmeras se ainda não carregou
   if (state.availableCameras.length === 0) {
     await listAvailableCameras();
+    // Se houver múltiplas câmeras, adicionar o seletor
+    if (state.availableCameras.length > 1) {
+      const newHtml = getCameraSelectorHtml();
+      const existingSelector = wrap.querySelector('.camera-selector');
+      if (newHtml && !existingSelector) {
+        const actionsDiv = wrap.querySelector('.test-cam-actions');
+        if (actionsDiv) {
+          actionsDiv.insertAdjacentHTML('beforebegin', newHtml);
+        }
+      }
+    }
   }
 
   try {
