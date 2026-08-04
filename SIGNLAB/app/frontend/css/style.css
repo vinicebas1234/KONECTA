@@ -228,6 +228,27 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 80px; }
 .step:hover:not(.active) { background: var(--bg); }
 
 /* ===== Classes ===== */
+.media-tabs {
+  display: inline-flex;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 5px;
+  margin-bottom: 18px;
+}
+.media-tab {
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  padding: 9px 18px;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--muted);
+}
+.media-tab.active { background: var(--accent-soft); color: var(--accent-ink); }
+.media-tab:hover:not(.active) { background: var(--bg); }
+
 .class-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 18px; }
 
 .class-card {

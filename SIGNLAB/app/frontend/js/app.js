@@ -8,6 +8,7 @@ const state = {
   examples: {},       // classId -> lista de exemplos
   experiments: [],    // experimentos do projeto (mais recente primeiro)
   tab: 'exemplos',
+  mediaTab: 'image',  // modalidade ativa na etapa Exemplos: 'image' | 'video'
   uploadClassId: null,
   testExpId: null,    // experimento selecionado na aba Teste
   testResult: null,
@@ -252,24 +253,36 @@ function thumbHtml(example) {
 }
 
 function classCardHtml(cls) {
-  const examples = state.examples[cls.id] || [];
+  const kind = state.mediaTab;
+  const all = state.examples[cls.id] || [];
+  const examples = all.filter(e => e.kind === kind);
   const shown = examples.slice(0, examples.length > 8 ? 7 : 8);
   const rest = examples.length - shown.length;
 
   const counts = `
     <div class="class-counts">
-      <span class="count-chip total">${plural(cls.total, 'exemplo')}</span>
-      ${cls.images ? `<span class="count-chip">${plural(cls.images, 'imagem', 'imagens')}</span>` : ''}
-      ${cls.videos ? `<span class="count-chip">${plural(cls.videos, 'vídeo')}</span>` : ''}
-      ${cls.captures ? `<span class="count-chip">${plural(cls.captures, 'captura')}</span>` : ''}
+      <span class="count-chip total">
+        ${kind === 'image' ? plural(examples.length, 'imagem', 'imagens')
+                           : plural(examples.length, 'vídeo')}
+      </span>
+      <span class="count-chip">${plural(cls.total, 'exemplo')} no total</span>
     </div>`;
 
+  const emptyHint = kind === 'image'
+    ? 'Arraste imagens aqui,<br>ou use os botões abaixo'
+    : 'Arraste vídeos aqui — você pode<br>enviar vários de uma vez';
   const gallery = examples.length
     ? `<div class="thumb-grid">
          ${shown.map(thumbHtml).join('')}
          ${rest > 0 ? `<div class="thumb more">+${rest}</div>` : ''}
        </div>`
-    : '<div class="dropzone-hint">Arraste imagens ou vídeos aqui<br>ou use os botões abaixo</div>';
+    : `<div class="dropzone-hint">${emptyHint}</div>`;
+
+  const actions = kind === 'image'
+    ? `<button class="btn btn-ghost" data-action="upload" data-id="${cls.id}">📁 Imagens</button>
+       <button class="btn btn-ghost" data-action="webcam" data-id="${cls.id}" data-name="${esc(cls.name)}">📷 Webcam</button>`
+    : `<button class="btn btn-ghost" data-action="upload" data-id="${cls.id}">📁 Vídeos</button>
+       <button class="btn btn-ghost" data-action="webcam" data-id="${cls.id}" data-name="${esc(cls.name)}">🎥 Gravar</button>`;
 
   return `
     <div class="class-card" data-class-id="${cls.id}">
@@ -282,16 +295,22 @@ function classCardHtml(cls) {
       </div>
       ${counts}
       ${gallery}
-      <div class="class-actions">
-        <button class="btn btn-ghost" data-action="upload" data-id="${cls.id}">📁 Arquivos</button>
-        <button class="btn btn-ghost" data-action="webcam" data-id="${cls.id}" data-name="${esc(cls.name)}">📷 Webcam</button>
-      </div>
+      <div class="class-actions">${actions}</div>
     </div>`;
 }
 
 function viewExamples() {
   const classes = state.project.classes;
+  const allExamples = Object.values(state.examples).flat();
+  const nImages = allExamples.filter(e => e.kind === 'image').length;
+  const nVideos = allExamples.filter(e => e.kind === 'video').length;
   return `
+    <div class="media-tabs">
+      <button class="media-tab ${state.mediaTab === 'image' ? 'active' : ''}"
+              data-action="media-tab" data-kind="image">🖼 Imagens (${nImages})</button>
+      <button class="media-tab ${state.mediaTab === 'video' ? 'active' : ''}"
+              data-action="media-tab" data-kind="video">🎥 Vídeos (${nVideos})</button>
+    </div>
     <div class="class-grid">
       ${classes.map(classCardHtml).join('')}
       <button class="add-class-card" data-action="add-class">
@@ -673,8 +692,15 @@ $app.addEventListener('click', async e => {
         'Todos os exemplos desta classe serão apagados definitivamente.');
       if (ok) { await api.deleteClass(id); toast('Classe excluída.', 'success'); refreshProject(); }
 
+    } else if (action === 'media-tab') {
+      state.mediaTab = target.dataset.kind;
+      renderTab();
+
     } else if (action === 'upload') {
       state.uploadClassId = Number(id);
+      $fileInput.accept = state.mediaTab === 'video'
+        ? '.mp4,.avi,.mov,.mkv,.webm'
+        : '.jpg,.jpeg,.png,.bmp,.webp';
       $fileInput.value = '';
       $fileInput.click();
 
@@ -682,7 +708,7 @@ $app.addEventListener('click', async e => {
       Webcam.open(Number(id), name, captured => {
         if (captured > 0) toast(`${captured} captura(s) adicionada(s).`, 'success');
         refreshProject();
-      });
+      }, state.mediaTab === 'video' ? 'video' : 'photo');
 
     } else if (action === 'del-example') {
       await api.deleteExample(id);

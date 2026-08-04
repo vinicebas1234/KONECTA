@@ -12,7 +12,7 @@ const Webcam = (() => {
 
   function el(id) { return overlay.querySelector(id); }
 
-  async function open(cid, className, onClose) {
+  async function open(cid, className, onClose, initialMode = 'photo') {
     classId = cid;
     onCloseCb = onClose;
     mode = 'photo';
@@ -49,6 +49,8 @@ const Webcam = (() => {
     capBtn.addEventListener('pointerdown', onHoldStart);
     capBtn.addEventListener('pointerup', onHoldEnd);
     capBtn.addEventListener('pointerleave', onHoldEnd);
+
+    if (initialMode !== 'photo') setMode(initialMode);
 
     try {
       stream = await navigator.mediaDevices.getUserMedia({
