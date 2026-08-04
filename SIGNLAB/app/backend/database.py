@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS examples (
     filename    TEXT NOT NULL,
     rel_path    TEXT NOT NULL,
     size_bytes  INTEGER NOT NULL DEFAULT 0,
+    signer_name TEXT DEFAULT 'unknown',
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -47,7 +48,18 @@ CREATE TABLE IF NOT EXISTS experiments (
     classes         TEXT,
     feature_config  TEXT,
     model_path      TEXT,
+    cross_signer    TEXT DEFAULT 'normal',
+    train_signers   TEXT,
+    test_signer     TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS signer_splits (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id      INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    signer_name     TEXT NOT NULL,
+    split           TEXT CHECK (split IN ('train', 'test')),
+    UNIQUE (project_id, signer_name, split)
 );
 
 CREATE INDEX IF NOT EXISTS idx_classes_project ON classes(project_id);

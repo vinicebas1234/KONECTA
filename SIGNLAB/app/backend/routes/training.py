@@ -45,6 +45,7 @@ class LsaeIn(BaseModel):
 class TrainIn(BaseModel):
     model_type: str = "rf"
     lsae: LsaeIn = LsaeIn()
+    cross_signer: bool = False
 
 
 def experiment_dict(row: sqlite3.Row) -> dict:
@@ -118,15 +119,20 @@ def _project_examples(db, project_id: int, kind: str):
 
 def _save_experiment(db, project, model_type: str, metrics: dict,
                      classes_info: list, feature_config: dict,
-                     save_model) -> int:
+                     save_model, cross_signer: bool = False, train_signers: list = None,
+                     test_signer: str = None) -> int:
     """Insere o experimento, salva o modelo via callback e grava o caminho."""
     cur = db.execute(
         """
-        INSERT INTO experiments (project_id, model_type, metrics, classes, feature_config)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO experiments (project_id, model_type, metrics, classes, feature_config,
+                                cross_signer, train_signers, test_signer)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (project["id"], model_type, json.dumps(metrics),
-         json.dumps(classes_info), json.dumps(feature_config)),
+         json.dumps(classes_info), json.dumps(feature_config),
+         "cross_signer" if cross_signer else "normal",
+         json.dumps(train_signers) if train_signers else None,
+         test_signer),
     )
     exp_id = cur.lastrowid
     models_dir = PROJECTS_DIR / project["slug"] / "models"
@@ -139,11 +145,21 @@ def _save_experiment(db, project, model_type: str, metrics: dict,
 
 
 def _train_image(db, job, project, project_id: int, model_type: str,
-                 lsae_config) -> int:
+                 lsae_config, cross_signer: bool = False) -> int:
     from vision.features import FEATURE_CONFIG, feature_vector
     from training import image_classifier
 
     examples = _project_examples(db, project_id, "image")
+    train_signers, test_signer = [], None
+    if cross_signer:
+        splits = db.execute(
+            "SELECT signer_name, split FROM signer_splits WHERE project_id = ?",
+            (project_id,)).fetchall()
+        train_signers = [s[0] for s in splits if s[1] == "train"]
+        test_signer = next((s[0] for s in splits if s[1] == "test"), None)
+        if not train_signers or not test_signer:
+            raise ValueError("Cross-signer split não configurado. Use /cross-signer-split primeiro.")
+        examples = [e for e in examples if e.get("signer_name") in train_signers or e.get("signer_name") == "unknown"]
     job.update(state="extracting", total=len(examples), done=0)
 
     X_rows, y_rows = [], []
@@ -190,17 +206,29 @@ def _train_image(db, job, project, project_id: int, model_type: str,
         return path
 
     return _save_experiment(db, project, model_type, metrics,
-                            classes_info, FEATURE_CONFIG, save_model)
+                            classes_info, FEATURE_CONFIG, save_model,
+                            cross_signer=cross_signer, train_signers=train_signers,
+                            test_signer=test_signer)
 
 
 def _train_video(db, job, project, project_id: int, model_type: str,
-                 lsae_config) -> int:
+                 lsae_config, cross_signer: bool = False) -> int:
     from vision.features import FEATURE_CONFIG
     from vision.video import DEFAULT_SEQUENCE_LENGTH
     from training import sequence_classifier
 
     seq_len = DEFAULT_SEQUENCE_LENGTH
     examples = _project_examples(db, project_id, "video")
+    train_signers, test_signer = [], None
+    if cross_signer:
+        splits = db.execute(
+            "SELECT signer_name, split FROM signer_splits WHERE project_id = ?",
+            (project_id,)).fetchall()
+        train_signers = [s[0] for s in splits if s[1] == "train"]
+        test_signer = next((s[0] for s in splits if s[1] == "test"), None)
+        if not train_signers or not test_signer:
+            raise ValueError("Cross-signer split não configurado. Use /cross-signer-split primeiro.")
+        examples = [e for e in examples if e.get("signer_name") in train_signers or e.get("signer_name") == "unknown"]
     job.update(state="extracting", total=len(examples), done=0)
 
     X_rows, y_rows, qualities = [], [], []
@@ -254,10 +282,12 @@ def _train_video(db, job, project, project_id: int, model_type: str,
         return path
 
     return _save_experiment(db, project, model_type, metrics,
-                            classes_info, feature_config, save_model)
+                            classes_info, feature_config, save_model,
+                            cross_signer=cross_signer, train_signers=train_signers,
+                            test_signer=test_signer)
 
 
-def run_training(project_id: int, model_type: str, lsae_config) -> None:
+def run_training(project_id: int, model_type: str, lsae_config, cross_signer: bool = False) -> None:
     job = JOBS[project_id]
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
@@ -266,10 +296,10 @@ def run_training(project_id: int, model_type: str, lsae_config) -> None:
             "SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone())
         if MODALITY[model_type] == "video":
             exp_id = _train_video(db, job, project, project_id, model_type,
-                                  lsae_config)
+                                  lsae_config, cross_signer)
         else:
             exp_id = _train_image(db, job, project, project_id, model_type,
-                                  lsae_config)
+                                  lsae_config, cross_signer)
         job.update(state="done", experiment_id=exp_id)
     except ValueError as err:
         job.update(state="error", message=str(err))
@@ -297,7 +327,7 @@ def start_training(project_id: int, body: TrainIn,
     from lsae.pipeline import LsaeConfig
     lsae_config = LsaeConfig(**body.lsae.model_dump())
     thread = threading.Thread(target=run_training,
-                              args=(project_id, body.model_type, lsae_config),
+                              args=(project_id, body.model_type, lsae_config, body.cross_signer),
                               daemon=True)
     thread.start()
     return {"started": True}

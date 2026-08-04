@@ -52,6 +52,14 @@ const api = (() => {
     },
     exportUrl: (experimentId) => `/api/experiments/${experimentId}/export`,
 
+    listSigners: (projectId) => request('GET', `/api/projects/${projectId}/signers`),
+    setCrossSignerSplit: (projectId, testSigner) =>
+      request('POST', `/api/projects/${projectId}/cross-signer-split`, { test_signer: testSigner }),
+    getCrossSignerStatus: (projectId) =>
+      request('GET', `/api/projects/${projectId}/cross-signer-status`),
+    listExperimentsBySigners: (projectId) =>
+      request('GET', `/api/projects/${projectId}/experiments-by-signer`),
+
     fileUrl: (relPath) => `/files/${relPath}`,
   };
 })();
