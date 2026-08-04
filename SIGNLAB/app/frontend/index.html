@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SIGNLAB — Laboratório de Libras</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A4%9F%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/">
+      <span class="brand-mark">🤟</span>
+      <span class="brand-name">SIGN<b>LAB</b></span>
+      <span class="brand-tag">Laboratório de Libras</span>
+    </a>
+  </header>
+
+  <main id="app"></main>
+
+  <input type="file" id="file-input" multiple
+         accept=".jpg,.jpeg,.png,.bmp,.webp,.mp4,.avi,.mov,.mkv,.webm" hidden>
+
+  <div id="modal-root"></div>
+  <div id="toasts"></div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/webcam.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

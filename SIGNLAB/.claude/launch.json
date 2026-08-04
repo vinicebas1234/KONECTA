@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "signlab",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "uvicorn", "app.backend.main:app", "--port", "8100"],
+      "port": 8100
+    }
+  ]
+}
