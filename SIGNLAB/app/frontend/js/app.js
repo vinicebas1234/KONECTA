@@ -1142,7 +1142,7 @@ $app.addEventListener('click', async e => {
   }
 });
 
-$app.addEventListener('change', e => {
+$app.addEventListener('change', async e => {
   const select = e.target.closest('[data-role="test-exp"]');
   if (select) {
     state.testExpId = Number(select.value);
@@ -1167,7 +1167,7 @@ $app.addEventListener('change', e => {
     if (state.testStream) {
       state.testStream.getTracks().forEach(track => track.stop());
       state.testStream = null;
-      openTestCam();
+      await openTestCam();
     }
   }
 });
