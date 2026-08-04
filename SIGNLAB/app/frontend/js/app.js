@@ -8,14 +8,27 @@ const state = {
   examples: {},       // classId -> lista de exemplos
   experiments: [],    // experimentos do projeto (mais recente primeiro)
   tab: 'exemplos',
-  mediaTab: 'image',  // modalidade ativa na etapa Exemplos: 'image' | 'video'
+  mediaTab: 'image',      // modalidade ativa na etapa Exemplos
+  trainModality: 'image', // modalidade do treinamento: 'image' | 'video'
   uploadClassId: null,
-  testExpId: null,    // experimento selecionado na aba Teste
+  testExpId: null,        // experimento selecionado na aba Teste
   testResult: null,
-  testStream: null,   // stream da webcam de teste
+  testStream: null,       // stream da webcam de teste
+  testRecorder: null,     // MediaRecorder do teste temporal
   pollTimer: null,
   training: false,
 };
+
+const MODEL_LABELS = { rf: 'Random Forest', mlp: 'MLP', bilstm: 'BiLSTM', lstm: 'LSTM' };
+const MODEL_MODALITY = { rf: 'image', mlp: 'image', bilstm: 'video', lstm: 'video' };
+
+function classKindCounts(clsId) {
+  const all = state.examples[clsId] || [];
+  return {
+    images: all.filter(e => e.kind === 'image').length,
+    videos: all.filter(e => e.kind === 'video').length,
+  };
+}
 
 /* ===== Utilidades ===== */
 function esc(text) {
@@ -106,6 +119,11 @@ function modalConfirm(title, message) {
 window.addEventListener('hashchange', route);
 
 function stopTestCam() {
+  if (state.testRecorder) {
+    state.testRecorder.onstop = null;
+    try { state.testRecorder.stop(); } catch (_) {}
+    state.testRecorder = null;
+  }
   if (state.testStream) {
     state.testStream.getTracks().forEach(t => t.stop());
     state.testStream = null;
@@ -320,35 +338,40 @@ function viewExamples() {
 }
 
 /* ===== Aba 02 — Treinamento ===== */
-function datasetAnalysis() {
+function datasetAnalysis(modality) {
   const classes = state.project.classes;
   const items = [];
+  const isVideo = modality === 'video';
+  const noun = isVideo ? 'vídeo' : 'imagem';
+  const nounPl = isVideo ? 'vídeos' : 'imagens';
+  const minSuggested = isVideo ? 10 : 30;
 
   if (classes.length < 2) {
     items.push(['warn', '⚠', 'Crie pelo menos 2 classes para poder treinar um modelo.']);
   }
-  const imageCounts = classes.map(c => c.images + c.captures);
 
-  for (const c of classes) {
-    const imgs = c.images + c.captures;
-    if (imgs === 0) {
-      items.push(['warn', '⚠', `A classe “${c.name}” não possui imagens (o treinamento desta fase usa imagens e capturas).`]);
-    } else if (imgs < 30) {
-      items.push(['warn', '⚠', `A classe “${c.name}” possui poucas imagens (${imgs}). Sugestão: pelo menos 30.`]);
+  const counts = classes.map(c => {
+    const kc = classKindCounts(c.id);
+    return isVideo ? kc.videos : kc.images;
+  });
+
+  classes.forEach((c, i) => {
+    if (counts[i] === 0) {
+      items.push(['warn', '⚠', `A classe “${c.name}” não possui ${nounPl}.`]);
+    } else if (counts[i] < minSuggested) {
+      items.push(['warn', '⚠', `A classe “${c.name}” possui ${isVideo ? 'poucos' : 'poucas'} ${nounPl} (${counts[i]}). Sugestão: pelo menos ${minSuggested}.`]);
     }
-  }
+  });
 
-  const nonEmpty = imageCounts.filter(t => t > 0);
+  const nonEmpty = counts.filter(t => t > 0);
   if (nonEmpty.length >= 2 && Math.max(...nonEmpty) >= 3 * Math.min(...nonEmpty)) {
     items.push(['warn', '⚠', 'O dataset está desbalanceado: há grande diferença de exemplos entre classes.']);
   }
 
-  const images = classes.reduce((a, c) => a + c.images, 0);
-  const videos = classes.reduce((a, c) => a + c.videos, 0);
-  const captures = classes.reduce((a, c) => a + c.captures, 0);
-  items.push(['info', 'ℹ', `Dataset atual: ${plural(classes.length, 'classe')}, ` +
-    `${plural(images, 'imagem', 'imagens')}, ${plural(videos, 'vídeo')} e ${plural(captures, 'captura')} de webcam.` +
-    (videos ? ' Vídeos serão usados no treinamento temporal (Fase 3).' : '')]);
+  const total = counts.reduce((a, b) => a + b, 0);
+  items.push(['info', 'ℹ', `Dataset ${isVideo ? 'temporal' : 'estático'}: ` +
+    `${plural(classes.length, 'classe')} e ${plural(total, noun, nounPl)}.` +
+    (isVideo ? ' Cada vídeo vira uma sequência de 30 frames com landmarks.' : '')]);
 
   if (classes.length >= 2 && nonEmpty.length >= 2 &&
       !items.some(([type]) => type === 'warn')) {
@@ -381,7 +404,7 @@ function confusionHtml(confusion) {
 
 function experimentHtml(exp, open = false) {
   const m = exp.metrics;
-  const modelLabel = exp.model_type === 'rf' ? 'Random Forest' : 'MLP';
+  const modelLabel = `${MODEL_MODALITY[exp.model_type] === 'video' ? '🎥' : '🖼'} ${MODEL_LABELS[exp.model_type]}`;
   const excluded = (exp.classes || []).filter(c => c.excluded);
   return `
     <details class="exp-item" ${open ? 'open' : ''}>
@@ -421,7 +444,29 @@ function experimentHtml(exp, open = false) {
 }
 
 function viewTraining() {
-  const trainable = state.project.classes.filter(c => c.images + c.captures > 0).length >= 2;
+  const isVideo = state.trainModality === 'video';
+  const trainable = state.project.classes.filter(c => {
+    const kc = classKindCounts(c.id);
+    return (isVideo ? kc.videos : kc.images) > 0;
+  }).length >= 2;
+
+  const radios = isVideo
+    ? `<label><input type="radio" name="model-type" value="bilstm" checked>
+         <span><b>Automático</b> — BiLSTM (recomendado)</span></label>
+       <label><input type="radio" name="model-type" value="lstm">
+         <span><b>Avançado</b> — LSTM</span></label>`
+    : `<label><input type="radio" name="model-type" value="rf" checked>
+         <span><b>Automático</b> — Random Forest</span></label>
+       <label><input type="radio" name="model-type" value="mlp">
+         <span><b>Avançado</b> — MLP (rede neural)</span></label>`;
+
+  const description = isVideo
+    ? `Cada vídeo vira uma <b>sequência temporal</b>: frames → landmarks das mãos →
+       features normalizadas → rede recorrente (LSTM/BiLSTM). É o modo indicado para
+       sinais com movimento.`
+    : `Cada imagem vira landmarks das mãos (MediaPipe) → features normalizadas →
+       classificador. Indicado para sinais estáticos (configurações de mão).`;
+
   const history = state.experiments.length
     ? `<h3 class="history-title">Histórico de experimentos</h3>
        ${state.experiments.map((e, i) => experimentHtml(e, i === 0 && state.justTrained)).join('')}`
@@ -430,18 +475,16 @@ function viewTraining() {
   return `
     <div class="panel">
       <h3>Treinamento</h3>
-      <p class="note">
-        O SIGNLAB processa suas imagens (MediaPipe → landmarks das mãos → features
-        normalizadas) e treina um classificador. Vídeos entram na Fase 3 (temporal).
-      </p>
-      <div class="analysis">${datasetAnalysis()}</div>
+      <div class="media-tabs">
+        <button class="media-tab ${isVideo ? '' : 'active'}"
+                data-action="train-modality" data-modality="image">🖼 Imagens — estático</button>
+        <button class="media-tab ${isVideo ? 'active' : ''}"
+                data-action="train-modality" data-modality="video">🎥 Vídeos — temporal</button>
+      </div>
+      <p class="note">${description}</p>
+      <div class="analysis">${datasetAnalysis(state.trainModality)}</div>
       <div class="train-controls">
-        <div class="model-choice">
-          <label><input type="radio" name="model-type" value="rf" checked>
-            <span><b>Automático</b> — Random Forest</span></label>
-          <label><input type="radio" name="model-type" value="mlp">
-            <span><b>Avançado</b> — MLP (rede neural)</span></label>
-        </div>
+        <div class="model-choice">${radios}</div>
         <div class="train-cta">
           <button class="btn btn-primary btn-lg" data-action="train"
                   ${trainable && !state.training ? '' : 'disabled'}>
@@ -475,7 +518,7 @@ async function pollTraining(projectId) {
   if (status.state === 'extracting') {
     if (bar && status.total) {
       bar.style.width = `${Math.round(90 * status.done / status.total)}%`;
-      label.textContent = `Extraindo landmarks… ${status.done}/${status.total} imagens`;
+      label.textContent = `Extraindo landmarks… ${status.done}/${status.total} exemplos`;
     }
   } else if (status.state === 'training') {
     if (bar) { bar.style.width = '95%'; label.textContent = 'Treinando o modelo…'; }
@@ -498,14 +541,18 @@ async function pollTraining(projectId) {
 }
 
 /* ===== Aba 03 — Teste ===== */
+function currentTestExp() {
+  return state.experiments.find(e => e.id === state.testExpId) || state.experiments[0];
+}
+
 function expSelectHtml() {
   return `
     <label class="exp-select">Modelo:
       <select data-role="test-exp">
         ${state.experiments.map(e => `
           <option value="${e.id}" ${e.id === state.testExpId ? 'selected' : ''}>
-            #${String(e.id).padStart(3, '0')} — ${e.model_type === 'rf' ? 'Random Forest' : 'MLP'}
-            (accuracy ${pct(e.metrics.accuracy)})
+            #${String(e.id).padStart(3, '0')} — ${MODEL_MODALITY[e.model_type] === 'video' ? '🎥' : '🖼'}
+            ${MODEL_LABELS[e.model_type]} (accuracy ${pct(e.metrics.accuracy)})
           </option>`).join('')}
       </select>
     </label>`;
@@ -516,9 +563,14 @@ function testResultHtml() {
   if (!r) return '';
   if (r.loading) return '<div class="loading">Processando…</div>';
   if (!r.predictions.length) {
-    return `<div class="analysis-item warn"><span>⚠</span><span>${esc(r.message || 'Nenhuma mão detectada na imagem.')}</span></div>`;
+    return `<div class="analysis-item warn"><span>⚠</span><span>${esc(r.message || 'Nenhuma mão detectada.')}</span></div>`;
   }
   const top = r.predictions[0];
+  const detail = r.stats
+    ? `${r.stats.frames_with_hands}/${r.stats.frames_sampled} frames com mãos · ` +
+      (r.stats.duration_s ? `${r.stats.duration_s}s de vídeo · ` : '') +
+      `processado em ${r.stats.process_seconds}s`
+    : `${plural(r.hands_detected, 'mão detectada', 'mãos detectadas')} na imagem.`;
   return `
     <div class="pred-main">
       <span class="pred-class">${esc(top.class)}</span>
@@ -532,7 +584,7 @@ function testResultHtml() {
           <span class="prob-value">${pct(p.prob)}</span>
         </div>`).join('')}
     </div>
-    <p class="hint">${plural(r.hands_detected, 'mão detectada', 'mãos detectadas')} na imagem.</p>`;
+    <p class="hint">${detail}</p>`;
 }
 
 function viewTest() {
@@ -544,20 +596,34 @@ function viewTest() {
            <b>02 — Treinamento</b> e clique em “⚡ Treinar modelo”.</p>
       </div>`;
   }
+  const exp = currentTestExp();
+  const temporal = MODEL_MODALITY[exp.model_type] === 'video';
+  const inputButtons = temporal
+    ? `<button class="btn btn-ghost" data-action="test-upload">📁 Escolher vídeo</button>
+       <button class="btn btn-ghost" data-action="test-cam-open">🎥 Gravar da webcam</button>
+       <span class="hint">ou arraste um vídeo aqui</span>`
+    : `<button class="btn btn-ghost" data-action="test-upload">📁 Escolher imagem</button>
+       <button class="btn btn-ghost" data-action="test-cam-open">📷 Usar webcam</button>
+       <span class="hint">ou arraste uma imagem aqui</span>`;
+  const camButton = temporal
+    ? `<button class="btn btn-primary" data-action="test-cam-record">⏺ Gravar sinal</button>`
+    : `<button class="btn btn-primary" data-action="test-cam-shot">Capturar e reconhecer</button>`;
+
   return `
     <div class="panel">
       <h3>Teste</h3>
-      <p class="note">Envie uma imagem ou use a webcam para reconhecer um sinal com o modelo treinado.</p>
+      <p class="note">${temporal
+        ? 'Envie um vídeo ou grave o sinal pela webcam para reconhecê-lo com o modelo temporal.'
+        : 'Envie uma imagem ou use a webcam para reconhecer um sinal com o modelo treinado.'}</p>
       ${expSelectHtml()}
-      <div class="test-input test-drop">
-        <button class="btn btn-ghost" data-action="test-upload">📁 Escolher imagem</button>
-        <button class="btn btn-ghost" data-action="test-cam-open">📷 Usar webcam</button>
-        <span class="hint">ou arraste uma imagem aqui</span>
-      </div>
+      <div class="test-input test-drop">${inputButtons}</div>
       <div id="test-cam" class="test-cam" hidden>
-        <div class="webcam-stage"><video autoplay playsinline muted></video></div>
+        <div class="webcam-stage">
+          <video autoplay playsinline muted></video>
+          <span class="rec-dot">REC</span>
+        </div>
         <div class="test-cam-actions">
-          <button class="btn btn-primary" data-action="test-cam-shot">Capturar e reconhecer</button>
+          ${camButton}
           <button class="btn btn-ghost" data-action="test-cam-close">Fechar câmera</button>
         </div>
       </div>
@@ -608,6 +674,35 @@ function shootTestCam() {
   }, 'image/jpeg', 0.92);
 }
 
+function toggleTestRecording(button) {
+  if (state.testRecorder) {          // parar e reconhecer
+    state.testRecorder.stop();
+    return;
+  }
+  if (!state.testStream) return;
+  const chunks = [];
+  const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+    ? 'video/webm;codecs=vp9' : 'video/webm';
+  const recorder = new MediaRecorder(state.testStream, { mimeType: mime });
+  recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  recorder.onstop = () => {
+    state.testRecorder = null;
+    const wrap = document.getElementById('test-cam');
+    if (wrap) {
+      wrap.querySelector('.rec-dot').style.display = 'none';
+      const btn = wrap.querySelector('[data-action="test-cam-record"]');
+      if (btn) btn.textContent = '⏺ Gravar sinal';
+    }
+    const blob = new Blob(chunks, { type: 'video/webm' });
+    runPrediction(new File([blob], 'webcam_teste.webm'));
+  };
+  recorder.start();
+  state.testRecorder = recorder;
+  const wrap = document.getElementById('test-cam');
+  if (wrap) wrap.querySelector('.rec-dot').style.display = 'flex';
+  button.textContent = '⏹ Parar e reconhecer';
+}
+
 /* ===== Aba 04 — Exportar ===== */
 function viewExport() {
   if (!state.experiments.length) {
@@ -622,15 +717,16 @@ function viewExport() {
     <div class="panel">
       <h3>Exportar</h3>
       <p class="note">
-        O pacote exportado (.zip) contém <code>model.joblib</code> (modelo scikit-learn)
-        e <code>metadata.json</code> com classes, configuração de features, normalização
+        O pacote exportado (.zip) contém o modelo (<code>model.joblib</code> para
+        Random Forest/MLP, <code>model.keras</code> para LSTM/BiLSTM) e
+        <code>metadata.json</code> com classes, configuração de features, normalização
         e métricas — pronto para ser carregado em outra aplicação Python.
       </p>
       <div class="export-list">
         ${state.experiments.map(e => `
           <div class="export-row">
             <span class="exp-id">#${String(e.id).padStart(3, '0')}</span>
-            <span class="exp-model">${e.model_type === 'rf' ? 'Random Forest' : 'MLP'}</span>
+            <span class="exp-model">${MODEL_MODALITY[e.model_type] === 'video' ? '🎥' : '🖼'} ${MODEL_LABELS[e.model_type]}</span>
             <span class="exp-date">${formatDate(e.created_at)}</span>
             <span class="exp-metric">Accuracy <b>${pct(e.metrics.accuracy)}</b></span>
             <a class="btn btn-primary btn-sm" href="${api.exportUrl(e.id)}">⬇ Exportar</a>
@@ -714,6 +810,10 @@ $app.addEventListener('click', async e => {
       await api.deleteExample(id);
       refreshProject();
 
+    } else if (action === 'train-modality') {
+      state.trainModality = target.dataset.modality;
+      renderTab();
+
     } else if (action === 'train') {
       const modelType = document.querySelector('input[name="model-type"]:checked').value;
       await api.startTrain(state.project.id, modelType);
@@ -722,6 +822,10 @@ $app.addEventListener('click', async e => {
       pollTraining(state.project.id);
 
     } else if (action === 'test-upload') {
+      const temporal = MODEL_MODALITY[currentTestExp().model_type] === 'video';
+      $testFileInput.accept = temporal
+        ? '.mp4,.avi,.mov,.mkv,.webm'
+        : '.jpg,.jpeg,.png,.bmp,.webp';
       $testFileInput.value = '';
       $testFileInput.click();
 
@@ -730,6 +834,9 @@ $app.addEventListener('click', async e => {
 
     } else if (action === 'test-cam-shot') {
       shootTestCam();
+
+    } else if (action === 'test-cam-record') {
+      toggleTestRecording(target);
 
     } else if (action === 'test-cam-close') {
       stopTestCam();
@@ -746,8 +853,8 @@ $app.addEventListener('change', e => {
   if (select) {
     state.testExpId = Number(select.value);
     state.testResult = null;
-    const box = document.getElementById('test-result');
-    if (box) box.innerHTML = '';
+    stopTestCam();
+    renderTab();  // os controles mudam conforme a modalidade do experimento
   }
 });
 
