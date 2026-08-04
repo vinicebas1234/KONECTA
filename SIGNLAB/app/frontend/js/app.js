@@ -15,6 +15,8 @@ const state = {
   testResult: null,
   testStream: null,       // stream da webcam de teste
   testRecorder: null,     // MediaRecorder do teste temporal
+  selectedCameraId: null, // ID do dispositivo de câmera selecionado
+  availableCameras: [],   // lista de câmeras disponíveis
   pollTimer: null,
   training: false,
   lsae: {                 // configuração do LSAE enviada ao treinar
@@ -796,6 +798,7 @@ function viewTest() {
           <video autoplay playsinline muted></video>
           <span class="rec-dot">REC</span>
         </div>
+        ${getCameraSelectorHtml()}
         <div class="test-cam-actions">
           ${camButton}
           <button class="btn btn-ghost" data-action="test-cam-close">Fechar câmera</button>
@@ -820,13 +823,54 @@ async function runPrediction(file) {
   if (box2) box2.innerHTML = testResultHtml();
 }
 
+async function listAvailableCameras() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    state.availableCameras = devices.filter(d => d.kind === 'videoinput');
+    if (state.availableCameras.length > 0 && !state.selectedCameraId) {
+      state.selectedCameraId = state.availableCameras[0].deviceId;
+    }
+    return state.availableCameras;
+  } catch (err) {
+    console.error('Erro ao listar câmeras:', err);
+    return [];
+  }
+}
+
+function getCameraSelectorHtml() {
+  if (state.availableCameras.length <= 1) return '';
+  return `
+    <div class="camera-selector">
+      <label>Câmera:</label>
+      <select data-action="select-camera">
+        ${state.availableCameras.map(cam => `
+          <option value="${cam.deviceId}" ${cam.deviceId === state.selectedCameraId ? 'selected' : ''}>
+            ${cam.label || `Câmera ${state.availableCameras.indexOf(cam) + 1}`}
+          </option>
+        `).join('')}
+      </select>
+    </div>`;
+}
+
 async function openTestCam() {
   const wrap = document.getElementById('test-cam');
   if (!wrap) return;
+
+  // Atualizar lista de câmeras se ainda não carregou
+  if (state.availableCameras.length === 0) {
+    await listAvailableCameras();
+  }
+
   try {
-    state.testStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 480 }, audio: false,
-    });
+    const constraints = {
+      video: {
+        width: 640,
+        height: 480,
+        ...(state.selectedCameraId && { deviceId: { exact: state.selectedCameraId } })
+      },
+      audio: false,
+    };
+    state.testStream = await navigator.mediaDevices.getUserMedia(constraints);
   } catch (err) {
     toast('Não foi possível acessar a webcam: ' + err.message, 'error');
     return;
@@ -852,11 +896,22 @@ async function startContinuousRecognition() {
   const wrap = document.getElementById('test-cam');
   if (!wrap) return;
 
+  // Atualizar lista de câmeras se ainda não carregou
+  if (state.availableCameras.length === 0) {
+    await listAvailableCameras();
+  }
+
   try {
     if (!state.testStream) {
-      state.testStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480 }, audio: false,
-      });
+      const constraints = {
+        video: {
+          width: 640,
+          height: 480,
+          ...(state.selectedCameraId && { deviceId: { exact: state.selectedCameraId } })
+        },
+        audio: false,
+      };
+      state.testStream = await navigator.mediaDevices.getUserMedia(constraints);
     }
   } catch (err) {
     toast('Não foi possível acessar a webcam: ' + err.message, 'error');
@@ -1103,6 +1158,17 @@ $app.addEventListener('change', e => {
     else if (key === 'factor') state.lsae.factor = Number(lsaeInput.value);
     else state.lsae[key] = lsaeInput.checked;
     renderTab();  // atualiza visibilidade/estado dos controles
+    return;
+  }
+  const cameraSelect = e.target.closest('[data-action="select-camera"]');
+  if (cameraSelect) {
+    state.selectedCameraId = cameraSelect.value;
+    // Reiniciar stream com nova câmera se estiver aberto
+    if (state.testStream) {
+      state.testStream.getTracks().forEach(track => track.stop());
+      state.testStream = null;
+      openTestCam();
+    }
   }
 });
 
