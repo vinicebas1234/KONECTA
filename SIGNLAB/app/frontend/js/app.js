@@ -1,12 +1,19 @@
 /* SIGNLAB — aplicação principal (SPA com roteamento por hash). */
 const $app = document.getElementById('app');
 const $fileInput = document.getElementById('file-input');
+const $testFileInput = document.getElementById('test-file-input');
 
 const state = {
-  project: null,     // projeto aberto (com classes)
-  examples: {},      // classId -> lista de exemplos
+  project: null,      // projeto aberto (com classes)
+  examples: {},       // classId -> lista de exemplos
+  experiments: [],    // experimentos do projeto (mais recente primeiro)
   tab: 'exemplos',
   uploadClassId: null,
+  testExpId: null,    // experimento selecionado na aba Teste
+  testResult: null,
+  testStream: null,   // stream da webcam de teste
+  pollTimer: null,
+  training: false,
 };
 
 /* ===== Utilidades ===== */
@@ -28,6 +35,8 @@ function formatDate(sqliteDate) {
   const d = new Date(sqliteDate.replace(' ', 'T') + 'Z');
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
 }
+
+function pct(x) { return (x * 100).toFixed(1).replace('.', ',') + '%'; }
 
 function plural(n, singular, pluralWord) {
   return `${n} ${n === 1 ? singular : (pluralWord || singular + 's')}`;
@@ -95,13 +104,22 @@ function modalConfirm(title, message) {
 /* ===== Roteamento ===== */
 window.addEventListener('hashchange', route);
 
+function stopTestCam() {
+  if (state.testStream) {
+    state.testStream.getTracks().forEach(t => t.stop());
+    state.testStream = null;
+  }
+}
+
 function route() {
+  stopTestCam();
   const hash = location.hash || '#/';
   const match = hash.match(/^#\/p\/(\d+)/);
   if (match) {
     state.tab = 'exemplos';
     loadProject(Number(match[1]));
   } else {
+    state.project = null;
     renderHome();
   }
 }
@@ -153,12 +171,20 @@ async function renderHome() {
 async function loadProject(id) {
   $app.innerHTML = '<div class="loading">Carregando…</div>';
   try {
-    state.project = await api.getProject(id);
+    const [project, experiments] = await Promise.all([
+      api.getProject(id),
+      api.listExperiments(id),
+    ]);
+    state.project = project;
+    state.experiments = experiments;
+    if (!state.experiments.some(e => e.id === state.testExpId)) {
+      state.testExpId = experiments.length ? experiments[0].id : null;
+    }
     const lists = await Promise.all(
-      state.project.classes.map(c => api.listExamples(c.id))
+      project.classes.map(c => api.listExamples(c.id))
     );
     state.examples = {};
-    state.project.classes.forEach((c, i) => { state.examples[c.id] = lists[i]; });
+    project.classes.forEach((c, i) => { state.examples[c.id] = lists[i]; });
   } catch (err) {
     $app.innerHTML = `<div class="empty">Erro: ${esc(err.message)} — <a href="#/">voltar</a></div>`;
     return;
@@ -171,6 +197,7 @@ function refreshProject() {
 }
 
 function renderProject() {
+  stopTestCam();
   const p = state.project;
   const tabs = [
     ['exemplos', '01', 'Exemplos'],
@@ -273,7 +300,7 @@ function viewExamples() {
     </div>`;
 }
 
-/* ===== Aba 02 — Treinamento (análise do dataset; treino chega na Fase 2) ===== */
+/* ===== Aba 02 — Treinamento ===== */
 function datasetAnalysis() {
   const classes = state.project.classes;
   const items = [];
@@ -281,18 +308,18 @@ function datasetAnalysis() {
   if (classes.length < 2) {
     items.push(['warn', '⚠', 'Crie pelo menos 2 classes para poder treinar um modelo.']);
   }
-  const totals = classes.map(c => c.total);
-  const totalExamples = totals.reduce((a, b) => a + b, 0);
+  const imageCounts = classes.map(c => c.images + c.captures);
 
   for (const c of classes) {
-    if (c.total === 0) {
-      items.push(['warn', '⚠', `A classe “${c.name}” não possui exemplos.`]);
-    } else if (c.total < 30) {
-      items.push(['warn', '⚠', `A classe “${c.name}” possui poucos exemplos (${c.total}). Sugestão: pelo menos 30.`]);
+    const imgs = c.images + c.captures;
+    if (imgs === 0) {
+      items.push(['warn', '⚠', `A classe “${c.name}” não possui imagens (o treinamento desta fase usa imagens e capturas).`]);
+    } else if (imgs < 30) {
+      items.push(['warn', '⚠', `A classe “${c.name}” possui poucas imagens (${imgs}). Sugestão: pelo menos 30.`]);
     }
   }
 
-  const nonEmpty = totals.filter(t => t > 0);
+  const nonEmpty = imageCounts.filter(t => t > 0);
   if (nonEmpty.length >= 2 && Math.max(...nonEmpty) >= 3 * Math.min(...nonEmpty)) {
     items.push(['warn', '⚠', 'O dataset está desbalanceado: há grande diferença de exemplos entre classes.']);
   }
@@ -301,11 +328,12 @@ function datasetAnalysis() {
   const videos = classes.reduce((a, c) => a + c.videos, 0);
   const captures = classes.reduce((a, c) => a + c.captures, 0);
   items.push(['info', 'ℹ', `Dataset atual: ${plural(classes.length, 'classe')}, ` +
-    `${plural(images, 'imagem', 'imagens')}, ${plural(videos, 'vídeo')} e ${plural(captures, 'captura')} de webcam.`]);
+    `${plural(images, 'imagem', 'imagens')}, ${plural(videos, 'vídeo')} e ${plural(captures, 'captura')} de webcam.` +
+    (videos ? ' Vídeos serão usados no treinamento temporal (Fase 3).' : '')]);
 
-  if (classes.length >= 2 && totalExamples > 0 &&
+  if (classes.length >= 2 && nonEmpty.length >= 2 &&
       !items.some(([type]) => type === 'warn')) {
-    items.push(['ok', '✓', 'Dataset processável. Pronto para o pipeline de treinamento.']);
+    items.push(['ok', '✓', 'Dataset processável. Pronto para o treinamento.']);
   }
   items.push(['info', '💡', 'O LSAE poderá aumentar a diversidade espacial e temporal deste dataset (Fase 4).']);
 
@@ -313,49 +341,283 @@ function datasetAnalysis() {
     `<div class="analysis-item ${type}"><span>${icon}</span><span>${esc(text)}</span></div>`).join('');
 }
 
-function viewTraining() {
+function confusionHtml(confusion) {
+  const max = Math.max(1, ...confusion.matrix.flat());
   return `
-    <div class="panel">
-      <span class="phase-badge">Disponível na Fase 2 — Imagens</span>
-      <h3>Treinamento</h3>
-      <p class="note">
-        Aqui o SIGNLAB vai processar seus exemplos (MediaPipe → landmarks → features),
-        aplicar o LSAE e treinar o modelo automaticamente. Enquanto o pipeline não chega,
-        a análise do dataset já está ativa:
-      </p>
-      <div class="analysis">${datasetAnalysis()}</div>
-      <div class="train-cta">
-        <button class="btn btn-primary btn-lg" disabled title="Disponível na Fase 2">
-          ⚡ Treinar modelo
-        </button>
-      </div>
+    <div class="conf-wrap">
+      <table class="conf-table">
+        <tr><th></th>${confusion.labels.map(l => `<th>${esc(l)}</th>`).join('')}</tr>
+        ${confusion.matrix.map((row, i) => `
+          <tr>
+            <th>${esc(confusion.labels[i])}</th>
+            ${row.map((v, j) => {
+              const alpha = v === 0 ? 0 : 0.15 + 0.6 * (v / max);
+              const color = i === j ? `rgba(10,163,150,${alpha})` : `rgba(214,69,69,${alpha})`;
+              return `<td style="background:${color}">${v}</td>`;
+            }).join('')}
+          </tr>`).join('')}
+      </table>
     </div>`;
 }
 
-/* ===== Aba 03 — Teste ===== */
-function viewTest() {
+function experimentHtml(exp, open = false) {
+  const m = exp.metrics;
+  const modelLabel = exp.model_type === 'rf' ? 'Random Forest' : 'MLP';
+  const excluded = (exp.classes || []).filter(c => c.excluded);
+  return `
+    <details class="exp-item" ${open ? 'open' : ''}>
+      <summary>
+        <span class="exp-id">#${String(exp.id).padStart(3, '0')}</span>
+        <span class="exp-model">${modelLabel}</span>
+        <span class="exp-date">${formatDate(exp.created_at)}</span>
+        <span class="exp-metric">Accuracy <b>${pct(m.accuracy)}</b></span>
+        <span class="exp-metric">F1 <b>${pct(m.f1)}</b></span>
+      </summary>
+      <div class="exp-body">
+        <div class="metrics-grid">
+          <div class="metric"><span>Accuracy</span><b>${pct(m.accuracy)}</b></div>
+          <div class="metric"><span>Precision</span><b>${pct(m.precision)}</b></div>
+          <div class="metric"><span>Recall</span><b>${pct(m.recall)}</b></div>
+          <div class="metric"><span>F1</span><b>${pct(m.f1)}</b></div>
+          <div class="metric"><span>Qualidade dos landmarks</span><b>${pct(m.landmark_quality)}</b></div>
+          <div class="metric"><span>Treino / Teste</span><b>${m.train_size} / ${m.test_size}</b></div>
+        </div>
+        <h4>Métricas por classe</h4>
+        <table class="per-class-table">
+          <tr><th>Classe</th><th>Precision</th><th>Recall</th><th>F1</th><th>Exemplos de teste</th></tr>
+          ${m.per_class.map(c => `
+            <tr><td>${esc(c.name)}</td><td>${pct(c.precision)}</td>
+                <td>${pct(c.recall)}</td><td>${pct(c.f1)}</td><td>${c.support}</td></tr>`).join('')}
+        </table>
+        <h4>Matriz de confusão <span class="hint">(linhas: real · colunas: predição)</span></h4>
+        ${confusionHtml(m.confusion)}
+        ${excluded.length ? `<p class="note">⚠ Classes excluídas por falta de exemplos válidos:
+          ${excluded.map(c => esc(c.name)).join(', ')}</p>` : ''}
+        <div class="exp-actions">
+          <a class="btn btn-ghost btn-sm" href="${api.exportUrl(exp.id)}">⬇ Exportar modelo</a>
+          <span class="hint">Treinado em ${m.train_seconds}s</span>
+        </div>
+      </div>
+    </details>`;
+}
+
+function viewTraining() {
+  const trainable = state.project.classes.filter(c => c.images + c.captures > 0).length >= 2;
+  const history = state.experiments.length
+    ? `<h3 class="history-title">Histórico de experimentos</h3>
+       ${state.experiments.map((e, i) => experimentHtml(e, i === 0 && state.justTrained)).join('')}`
+    : '';
+
   return `
     <div class="panel">
-      <span class="phase-badge">Disponível nas Fases 2, 3 e 6</span>
-      <h3>Teste</h3>
+      <h3>Treinamento</h3>
       <p class="note">
-        Depois de treinar, você poderá testar o modelo com uma <b>imagem</b>, um
-        <b>vídeo</b> ou em <b>tempo real pela webcam</b>, vendo a confiança de cada classe.
+        O SIGNLAB processa suas imagens (MediaPipe → landmarks das mãos → features
+        normalizadas) e treina um classificador. Vídeos entram na Fase 3 (temporal).
       </p>
+      <div class="analysis">${datasetAnalysis()}</div>
+      <div class="train-controls">
+        <div class="model-choice">
+          <label><input type="radio" name="model-type" value="rf" checked>
+            <span><b>Automático</b> — Random Forest</span></label>
+          <label><input type="radio" name="model-type" value="mlp">
+            <span><b>Avançado</b> — MLP (rede neural)</span></label>
+        </div>
+        <div class="train-cta">
+          <button class="btn btn-primary btn-lg" data-action="train"
+                  ${trainable && !state.training ? '' : 'disabled'}>
+            ⚡ Treinar modelo
+          </button>
+        </div>
+      </div>
+      <div id="train-progress" ${state.training ? '' : 'hidden'}>
+        <div class="progress-track"><div class="progress-fill" id="train-bar"></div></div>
+        <p class="progress-label" id="train-label">Iniciando…</p>
+      </div>
+    </div>
+    ${history}`;
+}
+
+/* ===== Polling do treinamento ===== */
+async function pollTraining(projectId) {
+  clearTimeout(state.pollTimer);
+  let status;
+  try {
+    status = await api.trainStatus(projectId);
+  } catch (_) {
+    state.pollTimer = setTimeout(() => pollTraining(projectId), 1200);
+    return;
+  }
+  if (!state.project || state.project.id !== projectId) return;
+
+  const bar = document.getElementById('train-bar');
+  const label = document.getElementById('train-label');
+
+  if (status.state === 'extracting') {
+    if (bar && status.total) {
+      bar.style.width = `${Math.round(90 * status.done / status.total)}%`;
+      label.textContent = `Extraindo landmarks… ${status.done}/${status.total} imagens`;
+    }
+  } else if (status.state === 'training') {
+    if (bar) { bar.style.width = '95%'; label.textContent = 'Treinando o modelo…'; }
+  } else if (status.state === 'done') {
+    state.training = false;
+    state.justTrained = true;
+    toast('Modelo treinado com sucesso!', 'success');
+    state.experiments = await api.listExperiments(projectId);
+    state.testExpId = status.experiment_id;
+    if (state.tab === 'treino') renderTab();
+    state.justTrained = false;
+    return;
+  } else if (status.state === 'error') {
+    state.training = false;
+    toast(status.message || 'Falha no treinamento.', 'error');
+    if (state.tab === 'treino') renderTab();
+    return;
+  }
+  state.pollTimer = setTimeout(() => pollTraining(projectId), 700);
+}
+
+/* ===== Aba 03 — Teste ===== */
+function expSelectHtml() {
+  return `
+    <label class="exp-select">Modelo:
+      <select data-role="test-exp">
+        ${state.experiments.map(e => `
+          <option value="${e.id}" ${e.id === state.testExpId ? 'selected' : ''}>
+            #${String(e.id).padStart(3, '0')} — ${e.model_type === 'rf' ? 'Random Forest' : 'MLP'}
+            (accuracy ${pct(e.metrics.accuracy)})
+          </option>`).join('')}
+      </select>
+    </label>`;
+}
+
+function testResultHtml() {
+  const r = state.testResult;
+  if (!r) return '';
+  if (r.loading) return '<div class="loading">Processando…</div>';
+  if (!r.predictions.length) {
+    return `<div class="analysis-item warn"><span>⚠</span><span>${esc(r.message || 'Nenhuma mão detectada na imagem.')}</span></div>`;
+  }
+  const top = r.predictions[0];
+  return `
+    <div class="pred-main">
+      <span class="pred-class">${esc(top.class)}</span>
+      <span class="pred-prob">${pct(top.prob)}</span>
+    </div>
+    <div class="prob-list">
+      ${r.predictions.map(p => `
+        <div class="prob-row">
+          <span class="prob-label">${esc(p.class)}</span>
+          <div class="prob-track"><div class="prob-fill" style="width:${Math.max(1, p.prob * 100)}%"></div></div>
+          <span class="prob-value">${pct(p.prob)}</span>
+        </div>`).join('')}
+    </div>
+    <p class="hint">${plural(r.hands_detected, 'mão detectada', 'mãos detectadas')} na imagem.</p>`;
+}
+
+function viewTest() {
+  if (!state.experiments.length) {
+    return `
+      <div class="panel">
+        <h3>Teste</h3>
+        <p class="note">Nenhum modelo treinado ainda. Vá para a etapa
+           <b>02 — Treinamento</b> e clique em “⚡ Treinar modelo”.</p>
+      </div>`;
+  }
+  return `
+    <div class="panel">
+      <h3>Teste</h3>
+      <p class="note">Envie uma imagem ou use a webcam para reconhecer um sinal com o modelo treinado.</p>
+      ${expSelectHtml()}
+      <div class="test-input test-drop">
+        <button class="btn btn-ghost" data-action="test-upload">📁 Escolher imagem</button>
+        <button class="btn btn-ghost" data-action="test-cam-open">📷 Usar webcam</button>
+        <span class="hint">ou arraste uma imagem aqui</span>
+      </div>
+      <div id="test-cam" class="test-cam" hidden>
+        <div class="webcam-stage"><video autoplay playsinline muted></video></div>
+        <div class="test-cam-actions">
+          <button class="btn btn-primary" data-action="test-cam-shot">Capturar e reconhecer</button>
+          <button class="btn btn-ghost" data-action="test-cam-close">Fechar câmera</button>
+        </div>
+      </div>
+      <div id="test-result">${testResultHtml()}</div>
     </div>`;
+}
+
+async function runPrediction(file) {
+  if (!state.testExpId) return;
+  state.testResult = { loading: true };
+  const box = document.getElementById('test-result');
+  if (box) box.innerHTML = testResultHtml();
+  try {
+    state.testResult = await api.predict(state.testExpId, file);
+  } catch (err) {
+    state.testResult = null;
+    toast('Falha no reconhecimento: ' + err.message, 'error');
+  }
+  const box2 = document.getElementById('test-result');
+  if (box2) box2.innerHTML = testResultHtml();
+}
+
+async function openTestCam() {
+  const wrap = document.getElementById('test-cam');
+  if (!wrap) return;
+  try {
+    state.testStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480 }, audio: false,
+    });
+  } catch (err) {
+    toast('Não foi possível acessar a webcam: ' + err.message, 'error');
+    return;
+  }
+  wrap.hidden = false;
+  wrap.querySelector('video').srcObject = state.testStream;
+}
+
+function shootTestCam() {
+  const wrap = document.getElementById('test-cam');
+  const video = wrap && wrap.querySelector('video');
+  if (!video || !video.videoWidth) return;
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  canvas.toBlob(blob => {
+    if (blob) runPrediction(new File([blob], 'webcam_teste.jpg'));
+  }, 'image/jpeg', 0.92);
 }
 
 /* ===== Aba 04 — Exportar ===== */
 function viewExport() {
+  if (!state.experiments.length) {
+    return `
+      <div class="panel">
+        <h3>Exportar</h3>
+        <p class="note">Nenhum modelo treinado ainda. Treine um modelo na etapa
+           <b>02 — Treinamento</b> para poder exportá-lo.</p>
+      </div>`;
+  }
   return `
     <div class="panel">
-      <span class="phase-badge">Disponível após o treinamento</span>
       <h3>Exportar</h3>
       <p class="note">
-        O modelo treinado poderá ser exportado (TensorFlow, Keras, TensorFlow.js, ONNX)
-        junto com configuração, classes, features, normalização e metadados —
-        pronto para ser usado no KONECTA.
+        O pacote exportado (.zip) contém <code>model.joblib</code> (modelo scikit-learn)
+        e <code>metadata.json</code> com classes, configuração de features, normalização
+        e métricas — pronto para ser carregado em outra aplicação Python.
       </p>
+      <div class="export-list">
+        ${state.experiments.map(e => `
+          <div class="export-row">
+            <span class="exp-id">#${String(e.id).padStart(3, '0')}</span>
+            <span class="exp-model">${e.model_type === 'rf' ? 'Random Forest' : 'MLP'}</span>
+            <span class="exp-date">${formatDate(e.created_at)}</span>
+            <span class="exp-metric">Accuracy <b>${pct(e.metrics.accuracy)}</b></span>
+            <a class="btn btn-primary btn-sm" href="${api.exportUrl(e.id)}">⬇ Exportar</a>
+          </div>`).join('')}
+      </div>
+      <p class="note">Exportação para TensorFlow.js e ONNX chega junto com os modelos temporais (Fase 3+).</p>
     </div>`;
 }
 
@@ -389,6 +651,7 @@ $app.addEventListener('click', async e => {
       refreshProject();
 
     } else if (action === 'tab') {
+      stopTestCam();
       state.tab = tab;
       renderProject();
 
@@ -424,9 +687,41 @@ $app.addEventListener('click', async e => {
     } else if (action === 'del-example') {
       await api.deleteExample(id);
       refreshProject();
+
+    } else if (action === 'train') {
+      const modelType = document.querySelector('input[name="model-type"]:checked').value;
+      await api.startTrain(state.project.id, modelType);
+      state.training = true;
+      renderTab();
+      pollTraining(state.project.id);
+
+    } else if (action === 'test-upload') {
+      $testFileInput.value = '';
+      $testFileInput.click();
+
+    } else if (action === 'test-cam-open') {
+      openTestCam();
+
+    } else if (action === 'test-cam-shot') {
+      shootTestCam();
+
+    } else if (action === 'test-cam-close') {
+      stopTestCam();
+      const wrap = document.getElementById('test-cam');
+      if (wrap) wrap.hidden = true;
     }
   } catch (err) {
     toast(err.message, 'error');
+  }
+});
+
+$app.addEventListener('change', e => {
+  const select = e.target.closest('[data-role="test-exp"]');
+  if (select) {
+    state.testExpId = Number(select.value);
+    state.testResult = null;
+    const box = document.getElementById('test-result');
+    if (box) box.innerHTML = '';
   }
 });
 
@@ -434,6 +729,11 @@ $fileInput.addEventListener('change', async () => {
   const files = [...$fileInput.files];
   if (!files.length || !state.uploadClassId) return;
   await uploadFiles(state.uploadClassId, files);
+});
+
+$testFileInput.addEventListener('change', () => {
+  const file = $testFileInput.files[0];
+  if (file) runPrediction(file);
 });
 
 async function uploadFiles(classId, files) {
@@ -452,26 +752,32 @@ async function uploadFiles(classId, files) {
   }
 }
 
-/* ===== Drag & drop nos cards de classe ===== */
+/* ===== Drag & drop (classes e teste) ===== */
 $app.addEventListener('dragover', e => {
-  const card = e.target.closest('.class-card');
-  if (!card) return;
+  const zone = e.target.closest('.class-card, .test-drop');
+  if (!zone) return;
   e.preventDefault();
-  card.classList.add('dragover');
+  zone.classList.add('dragover');
 });
 
 $app.addEventListener('dragleave', e => {
-  const card = e.target.closest('.class-card');
-  if (card && !card.contains(e.relatedTarget)) card.classList.remove('dragover');
+  const zone = e.target.closest('.class-card, .test-drop');
+  if (zone && !zone.contains(e.relatedTarget)) zone.classList.remove('dragover');
 });
 
 $app.addEventListener('drop', e => {
   const card = e.target.closest('.class-card');
-  if (!card) return;
+  const testZone = e.target.closest('.test-drop');
+  if (!card && !testZone) return;
   e.preventDefault();
-  card.classList.remove('dragover');
   const files = [...e.dataTransfer.files];
-  if (files.length) uploadFiles(Number(card.dataset.classId), files);
+  if (card) {
+    card.classList.remove('dragover');
+    if (files.length) uploadFiles(Number(card.dataset.classId), files);
+  } else {
+    testZone.classList.remove('dragover');
+    if (files.length) runPrediction(files[0]);
+  }
 });
 
 /* ===== Início ===== */

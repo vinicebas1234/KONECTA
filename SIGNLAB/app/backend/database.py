@@ -39,8 +39,20 @@ CREATE TABLE IF NOT EXISTS examples (
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS experiments (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id      INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    model_type      TEXT NOT NULL,
+    metrics         TEXT,
+    classes         TEXT,
+    feature_config  TEXT,
+    model_path      TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_classes_project ON classes(project_id);
 CREATE INDEX IF NOT EXISTS idx_examples_class ON examples(class_id);
+CREATE INDEX IF NOT EXISTS idx_experiments_project ON experiments(project_id);
 """
 
 

@@ -40,6 +40,17 @@ const api = (() => {
       return request('POST', `/api/classes/${classId}/examples`, form);
     },
 
+    startTrain: (projectId, modelType) =>
+      request('POST', `/api/projects/${projectId}/train`, { model_type: modelType }),
+    trainStatus: (projectId) => request('GET', `/api/projects/${projectId}/train/status`),
+    listExperiments: (projectId) => request('GET', `/api/projects/${projectId}/experiments`),
+    predict: (experimentId, file) => {
+      const form = new FormData();
+      form.append('file', file, file.name);
+      return request('POST', `/api/experiments/${experimentId}/predict`, form);
+    },
+    exportUrl: (experimentId) => `/api/experiments/${experimentId}/export`,
+
     fileUrl: (relPath) => `/files/${relPath}`,
   };
 })();
