@@ -1,2 +1,5 @@
 OCR/dados_libras/
 Datasets/
+__pycache__/
+*.pyc
+*.log
