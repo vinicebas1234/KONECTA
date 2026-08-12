@@ -51,13 +51,8 @@ class V1DynamicSource(DatasetSource):
         return carregar_v1_dinamicos(limite_sinais)
 
     def contar(self) -> dict:
-        from backend.services.dataset_provider import carregar_v1_dinamicos
-        amostras = carregar_v1_dinamicos()
-        return {
-            "amostras": len(amostras),
-            "sinais": len({a.sinal for a in amostras}),
-            "sinalizantes": len({a.sinalizante for a in amostras}),
-        }
+        from backend.services.dataset_provider import contar_v1_dinamicos
+        return contar_v1_dinamicos()
 
 
 class V1StaticSource(DatasetSource):
@@ -77,13 +72,8 @@ class V1StaticSource(DatasetSource):
         return carregar_v1_estaticos(limite_sinais)
 
     def contar(self) -> dict:
-        from backend.services.dataset_provider import carregar_v1_estaticos
-        amostras = carregar_v1_estaticos()
-        return {
-            "amostras": len(amostras),
-            "sinais": len({a.sinal for a in amostras}),
-            "sinalizantes": len({a.sinalizante for a in amostras}),
-        }
+        from backend.services.dataset_provider import contar_v1_estaticos
+        return contar_v1_estaticos()
 
 
 class SyntheticSource(DatasetSource):

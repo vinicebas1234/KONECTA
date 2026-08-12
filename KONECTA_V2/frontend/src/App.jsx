@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { executarAnalise, obterAnalise, obterFontes } from './api.js'
 import Dashboard from './pages/Dashboard.jsx'
+import Captura from './pages/Captura.jsx'
 import Reconhecimento from './pages/Reconhecimento.jsx'
 import Tracking from './pages/Tracking.jsx'
 import Treinar from './pages/Treinar.jsx'
@@ -12,6 +13,7 @@ import Relatorio from './pages/Relatorio.jsx'
 
 const PAGINAS = [
   { id: 'dashboard', rotulo: 'Dashboard', Componente: Dashboard },
+  { id: 'captura', rotulo: 'Captura', Componente: Captura },
   { id: 'reconhecimento', rotulo: 'Reconhecimento', Componente: Reconhecimento },
   { id: 'tracking', rotulo: 'Tracking', Componente: Tracking },
   { id: 'treinar', rotulo: 'Treinar Sinais', Componente: Treinar },

@@ -31,6 +31,71 @@ def fontes_disponiveis() -> dict[str, bool]:
     }
 
 
+def contar_v1_dinamicos() -> dict:
+    """Estatisticas rapidas dos sinais dinamicos SEM carregar os `.npy`.
+
+    Antes esta contagem reusava `carregar_v1_dinamicos()`, que decodifica
+    todos os arrays de landmarks so para contar (~1366 sinais / ~4200
+    arquivos = alguns minutos). Aqui apenas listamos nomes de arquivo.
+    """
+    base = CAMINHO_V1 / "dinamicos"
+    if not base.exists():
+        return {"amostras": 0, "sinais": 0, "sinalizantes": 0}
+
+    n_amostras = 0
+    n_sinais = 0
+    articuladores: set[str] = set()
+
+    for pasta_sinal in base.iterdir():
+        if not pasta_sinal.is_dir():
+            continue
+        pasta = pasta_sinal / "public"
+        if not pasta.exists():
+            continue
+        arquivos = list(pasta.glob("public_*.npy"))
+        if not arquivos:
+            continue
+        n_sinais += 1
+        n_amostras += len(arquivos)
+
+        marcadores = list(pasta.glob("*.npy.done"))
+        if len(marcadores) == len(arquivos):
+            for m in marcadores:
+                match = re.search(r"Articulador(\d+)", m.name)
+                if match:
+                    articuladores.add(f"Articulador{match.group(1)}")
+        if not articuladores:
+            articuladores.add("desconhecido")
+
+    return {
+        "amostras": n_amostras,
+        "sinais": n_sinais,
+        "sinalizantes": len(articuladores) if articuladores else 0,
+    }
+
+
+def contar_v1_estaticos() -> dict:
+    """Estatisticas rapidas dos sinais estaticos SEM carregar os `.npy`."""
+    base = CAMINHO_V1 / "estaticos"
+    if not base.exists():
+        return {"amostras": 0, "sinais": 0, "sinalizantes": 0}
+
+    n_amostras = 0
+    n_sinais = 0
+    for pasta_sinal in base.iterdir():
+        if not pasta_sinal.is_dir():
+            continue
+        arquivos = _arquivos_npy_estatico(pasta_sinal)
+        if not arquivos:
+            continue
+        n_sinais += 1
+        n_amostras += len(arquivos)
+
+    # A V1 nao persiste o vinculo amostra->sinalizante nos sinais estaticos
+    # (ver carregar_v1_estaticos): todas as amostras usam "desconhecido".
+    return {"amostras": n_amostras, "sinais": n_sinais, "sinalizantes": 1 if n_amostras else 0}
+
+
 def carregar(fonte: str, limite_sinais: int | None = None, on_progresso: Progresso = None) -> list[Amostra]:
     if fonte == "v1_dinamicos":
         return carregar_v1_dinamicos(limite_sinais, on_progresso)
@@ -95,10 +160,26 @@ def carregar_v1_dinamicos(
     return amostras
 
 
+def _arquivos_npy_estatico(pasta_sinal: Path) -> list[Path]:
+    """Lista os `.npy` de um sinal estatico.
+
+    Alguns sinais (ex.: B, D, E, F, G) tem as amostras direto na pasta do
+    sinal (`<Letra>/NNNN.npy`); outros guardam num subdiretorio
+    `<Letra>/local/local_NNNN.npy`. Usar so `glob("*.npy")` ignora esse
+    segundo formato e descartava silenciosamente ~70% das amostras
+    estaticas (5 de 7 sinais ficavam com 0 amostras). Aqui buscamos em
+    ambos os niveis.
+    """
+    diretos = sorted(pasta_sinal.glob("*.npy"))
+    aninhados = sorted(pasta_sinal.glob("*/*.npy"))
+    return diretos + aninhados
+
+
 def carregar_v1_estaticos(
     limite_sinais: int | None = None, on_progresso: Progresso = None
 ) -> list[Amostra]:
-    """Le os sinais estaticos da V1: `estaticos/<Letra>/NNNN.npy`, shape (126,)."""
+    """Le os sinais estaticos da V1: `estaticos/<Letra>/NNNN.npy` (ou
+    `estaticos/<Letra>/local/local_NNNN.npy`), shape (126,)."""
     base = CAMINHO_V1 / "estaticos"
     amostras: list[Amostra] = []
     pastas = sorted(p for p in base.iterdir() if p.is_dir())
@@ -108,7 +189,7 @@ def carregar_v1_estaticos(
     for i, pasta_sinal in enumerate(pastas):
         if on_progresso and i % 5 == 0:
             on_progresso(f"Lendo dataset V1 (estaticos): {i}/{len(pastas)} sinais")
-        for arquivo in sorted(pasta_sinal.glob("*.npy")):
+        for arquivo in _arquivos_npy_estatico(pasta_sinal):
             dados = np.load(arquivo)
             landmarks = dados.reshape(1, -1, 3).astype(np.float32)
             amostras.append(Amostra(

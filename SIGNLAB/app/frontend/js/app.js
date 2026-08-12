@@ -62,6 +62,13 @@ function plural(n, singular, pluralWord) {
   return `${n} ${n === 1 ? singular : (pluralWord || singular + 's')}`;
 }
 
+async function loadExamplesLazy(classId, limit = 100) {
+  if (state.examples[classId] !== undefined) return state.examples[classId];
+  const url = `/api/classes/${classId}/examples?limit=${limit}`;
+  state.examples[classId] = await (await fetch(url)).json();
+  return state.examples[classId];
+}
+
 /* ===== Modais ===== */
 function modalPrompt(title, placeholder, initial = '') {
   return new Promise(resolve => {
@@ -205,11 +212,8 @@ async function loadProject(id) {
     if (!state.experiments.some(e => e.id === state.testExpId)) {
       state.testExpId = experiments.length ? experiments[0].id : null;
     }
-    const lists = await Promise.all(
-      project.classes.map(c => api.listExamples(c.id))
-    );
     state.examples = {};
-    project.classes.forEach((c, i) => { state.examples[c.id] = lists[i]; });
+    // ponytail: Projeto grande (1000+ classes) precisa lazy-load. Só carrega exemplos sob demanda.
   } catch (err) {
     $app.innerHTML = `<div class="empty">Erro: ${esc(err.message)} — <a href="#/">voltar</a></div>`;
     return;
@@ -297,12 +301,7 @@ function classCardHtml(cls) {
   const emptyHint = kind === 'image'
     ? 'Arraste imagens aqui,<br>ou use os botões abaixo'
     : 'Arraste vídeos aqui — você pode<br>enviar vários de uma vez';
-  const gallery = examples.length
-    ? `<div class="thumb-grid">
-         ${shown.map(thumbHtml).join('')}
-         ${rest > 0 ? `<div class="thumb more">+${rest}</div>` : ''}
-       </div>`
-    : `<div class="dropzone-hint">${emptyHint}</div>`;
+  const gallery = `<div class="dropzone-hint">${emptyHint}</div>`;
 
   const actions = kind === 'image'
     ? `<button class="btn btn-ghost" data-action="upload" data-id="${cls.id}">📁 Imagens</button>
@@ -327,9 +326,12 @@ function classCardHtml(cls) {
 
 function viewExamples() {
   const classes = state.project.classes;
-  const allExamples = Object.values(state.examples).flat();
-  const nImages = allExamples.filter(e => e.kind === 'image').length;
-  const nVideos = allExamples.filter(e => e.kind === 'video').length;
+  let nImages = 0, nVideos = 0;
+  for (const cls of classes) {
+    const items = state.examples[cls.id] || [];
+    nImages += items.filter(e => e.kind === 'image').length;
+    nVideos += items.filter(e => e.kind === 'video').length;
+  }
   return `
     <div class="media-tabs">
       <button class="media-tab ${state.mediaTab === 'image' ? 'active' : ''}"

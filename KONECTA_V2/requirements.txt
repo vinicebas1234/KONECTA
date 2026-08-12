@@ -1,15 +1,24 @@
 # Dependencias do KONECTA V2 (nucleo atual)
 numpy
+scikit-learn
+pyyaml
+python-dotenv
+
+# Backend (FastAPI + WebSocket)
+fastapi
+uvicorn[standard]
+websockets
+
+# Capture / MediaPipe / Tracking Engine
+opencv-python
+mediapipe
 
 # AI Research Assistant (opcional nesta fase)
 anthropic
 
+# Testes
+pytest
+httpx
+
 # Etapas futuras (descomente conforme os motores forem implementados)
-# fastapi
-# uvicorn[standard]
-# websockets
-# mediapipe
-# opencv-python
 # torch
-# scikit-learn
-# pyyaml

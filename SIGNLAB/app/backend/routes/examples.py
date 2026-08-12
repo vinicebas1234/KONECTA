@@ -10,12 +10,14 @@ router = APIRouter(prefix="/api", tags=["examples"])
 
 
 @router.get("/classes/{class_id}/examples")
-def list_examples(class_id: int, db: sqlite3.Connection = Depends(get_db)):
+def list_examples(class_id: int, limit: int = 0, db: sqlite3.Connection = Depends(get_db)):
     class_row(db, class_id)
-    rows = db.execute(
-        "SELECT * FROM examples WHERE class_id = ? ORDER BY id DESC",
-        (class_id,),
-    ).fetchall()
+    if limit <= 0:
+        return []  # ponytail: large projects (1000+ classes) shouldn't preload all examples
+    query = "SELECT * FROM examples WHERE class_id = ? ORDER BY id DESC"
+    if limit > 0:
+        query += f" LIMIT {limit}"
+    rows = db.execute(query, (class_id,)).fetchall()
     return [dict(r) for r in rows]
 
 

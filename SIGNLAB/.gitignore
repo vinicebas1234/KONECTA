@@ -1,6 +1,6 @@
 __pycache__/
 *.pyc
-signlab.db
+data/signlab.db
 projects/
 .claude/settings.local.json
 node_modules/

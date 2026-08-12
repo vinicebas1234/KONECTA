@@ -105,73 +105,93 @@ export default function Reconhecimento() {
     }
   }, [])
 
+  // Desenhar landmarks no canvas
+  const desenharLandmarks = (landmarkData) => {
+    const ctx = canvasRef.current?.getContext('2d')
+    if (!ctx) return
+
+    const w = canvasRef.current.width
+    const h = canvasRef.current.height
+
+    // Limpar canvas (fundo transparente - mantém o vídeo visível)
+    ctx.clearRect(0, 0, w, h)
+
+    // Se landmarkData é um objeto com multiHandLandmarks (MediaPipe)
+    if (landmarkData && landmarkData.multiHandLandmarks && landmarkData.multiHandLandmarks.length > 0) {
+      for (let handIdx = 0; handIdx < landmarkData.multiHandLandmarks.length; handIdx++) {
+        const hand = landmarkData.multiHandLandmarks[handIdx]
+        desenharMao(ctx, hand, w, h)
+      }
+    }
+    // Se é um array de objetos { x, y, z } (modo teste)
+    else if (Array.isArray(landmarkData) && landmarkData.length > 0 && landmarkData[0]?.x !== undefined) {
+      // Dividir array de 42 pontos em duas mãos (21 cada)
+      const mao1 = landmarkData.slice(0, 21)
+      const mao2 = landmarkData.slice(21, 42)
+
+      if (mao1.some(p => p.x !== 0 || p.y !== 0)) {
+        desenharMao(ctx, mao1, w, h)
+      }
+      if (mao2.some(p => p.x !== 0 || p.y !== 0)) {
+        desenharMao(ctx, mao2, w, h)
+      }
+    }
+  }
+
+  const desenharMao = (ctx, hand, w, h) => {
+    const connections = [
+      [0, 1], [1, 2], [2, 3], [3, 4],           // Polegar
+      [5, 6], [6, 7], [7, 8],                   // Índice
+      [9, 10], [10, 11], [11, 12],              // Meio
+      [13, 14], [14, 15], [15, 16],             // Anelar
+      [17, 18], [18, 19], [19, 20],             // Mínimo
+      [0, 5], [5, 9], [9, 13], [13, 17], [17, 0] // Palma
+    ]
+
+    // Desenhar conexões (skeleton)
+    ctx.strokeStyle = '#FF0000'
+    ctx.lineWidth = 3
+    for (let [start, end] of connections) {
+      const p1 = hand[start]
+      const p2 = hand[end]
+      if (p1 && p2) {
+        ctx.beginPath()
+        ctx.moveTo(p1.x * w, p1.y * h)
+        ctx.lineTo(p2.x * w, p2.y * h)
+        ctx.stroke()
+      }
+    }
+
+    // Desenhar pontos
+    for (let i = 0; i < hand.length; i++) {
+      const point = hand[i]
+      const x = point.x * w
+      const y = point.y * h
+
+      ctx.fillStyle = '#00FF00'
+      ctx.beginPath()
+      ctx.arc(x, y, 6, 0, 2 * Math.PI)
+      ctx.fill()
+
+      ctx.strokeStyle = '#FFFFFF'
+      ctx.lineWidth = 1.5
+      ctx.stroke()
+    }
+  }
+
   // Callback quando MediaPipe detecta landmarks
   const onHandsResults = (results) => {
     if (!capturandoRef.current) return
 
     try {
-      const ctx = canvasRef.current?.getContext('2d')
-      if (!ctx) return
-
-      // Desenhar vídeo no canvas
-      const video = videoRef.current
-      if (video && video.readyState === video.HAVE_ENOUGH_DATA) {
-        ctx.drawImage(video, 0, 0, canvasRef.current.width, canvasRef.current.height)
-      }
+      // Desenhar landmarks no canvas
+      desenharLandmarks(results)
 
       // Extrair landmarks das mãos
       let landmarks = []
 
       if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
         console.log(`✓ Detectadas ${results.multiHandLandmarks.length} mão(s)`)
-
-        // Desenhar landmarks
-        for (let handIdx = 0; handIdx < results.multiHandLandmarks.length; handIdx++) {
-          const hand = results.multiHandLandmarks[handIdx]
-          const w = canvasRef.current.width
-          const h = canvasRef.current.height
-
-          // Desenhar conexões (skeleton) PRIMEIRO para aparecer atrás
-          const connections = [
-            [0, 1], [1, 2], [2, 3], [3, 4],           // Polegar
-            [5, 6], [6, 7], [7, 8],                   // Índice
-            [9, 10], [10, 11], [11, 12],              // Meio
-            [13, 14], [14, 15], [15, 16],             // Anelar
-            [17, 18], [18, 19], [19, 20],             // Mínimo
-            [0, 5], [5, 9], [9, 13], [13, 17], [17, 0] // Palma
-          ]
-
-          ctx.strokeStyle = '#FF0000'
-          ctx.lineWidth = 3
-          for (let [start, end] of connections) {
-            const p1 = hand[start]
-            const p2 = hand[end]
-            if (p1 && p2) {
-              ctx.beginPath()
-              ctx.moveTo(p1.x * w, p1.y * h)
-              ctx.lineTo(p2.x * w, p2.y * h)
-              ctx.stroke()
-            }
-          }
-
-          // Desenhar pontos DEPOIS para aparecer na frente
-          for (let i = 0; i < hand.length; i++) {
-            const point = hand[i]
-            const x = point.x * w
-            const y = point.y * h
-
-            // Desenhar círculo verde
-            ctx.fillStyle = '#00FF00'
-            ctx.beginPath()
-            ctx.arc(x, y, 6, 0, 2 * Math.PI)
-            ctx.fill()
-
-            // Borda branca
-            ctx.strokeStyle = '#FFFFFF'
-            ctx.lineWidth = 1.5
-            ctx.stroke()
-          }
-        }
 
         // Pegar landmarks de ambas as mãos (se houver)
         for (let hand of results.multiHandLandmarks) {
@@ -184,9 +204,8 @@ export default function Reconhecimento() {
       }
 
       // Se não detectou mão, usar zeros
-      // CORREÇÃO: Array.fill() com array compartilha referência! Usar map().
       if (landmarks.length === 0) {
-        landmarks = Array(42).fill(null).map(() => [0, 0, 0]) // 21 pontos x 2 mãos x 3 coords
+        landmarks = Array(42).fill(null).map(() => [0, 0, 0])
       }
 
       // Adicionar ao buffer
@@ -196,7 +215,7 @@ export default function Reconhecimento() {
       if (landmarksBufferRef.current.length >= 30) {
         console.log('📊 30 frames coletados, enviando para API...')
         fazerPredicao(landmarksBufferRef.current.slice(0, 30))
-        landmarksBufferRef.current = [] // Limpar buffer
+        landmarksBufferRef.current = []
       }
 
       setFrameAtual(prev => prev + 1)
@@ -322,6 +341,7 @@ export default function Reconhecimento() {
       const simulateFrames = () => {
         // Gerar landmarks realistas simulando uma mão (21 pontos x 2 mãos)
         const landmark = []
+        const landmarkObjects = []
 
         // Primeira mão (pontos 0-20)
         for (let i = 0; i < 21; i++) {
@@ -330,9 +350,14 @@ export default function Reconhecimento() {
           const baseY = 0.5 + Math.cos(i / 21 * Math.PI) * 0.2
           const noise = () => (Math.random() - 0.5) * 0.1
 
-          landmark.push(baseX + noise()) // x
-          landmark.push(baseY + noise()) // y
-          landmark.push(0.5 + noise())    // z
+          const x = baseX + noise()
+          const y = baseY + noise()
+          const z = 0.5 + noise()
+
+          landmark.push(x)
+          landmark.push(y)
+          landmark.push(z)
+          landmarkObjects.push({ x, y, z })
         }
 
         // Segunda mão (pontos 21-41) - posição diferente
@@ -341,10 +366,18 @@ export default function Reconhecimento() {
           const baseY = 0.5 + Math.cos(i / 21 * Math.PI) * 0.2
           const noise = () => (Math.random() - 0.5) * 0.1
 
-          landmark.push(baseX + noise()) // x
-          landmark.push(baseY + noise()) // y
-          landmark.push(0.5 + noise())    // z
+          const x = baseX + noise()
+          const y = baseY + noise()
+          const z = 0.5 + noise()
+
+          landmark.push(x)
+          landmark.push(y)
+          landmark.push(z)
+          landmarkObjects.push({ x, y, z })
         }
+
+        // Desenhar landmarks no canvas (modo teste)
+        desenharLandmarks(landmarkObjects)
 
         landmarksBufferRef.current.push(landmark)
         setFrameAtual(prev => prev + 1)
@@ -394,7 +427,7 @@ export default function Reconhecimento() {
               ref={canvasRef}
               width={640}
               height={480}
-              className="absolute inset-0 w-full h-full"
+              className="absolute inset-0 w-full h-full z-10"
             />
 
             {capturando && (

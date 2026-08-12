@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-DB_PATH = ROOT / "signlab.db"
+DB_PATH = ROOT / "data" / "signlab.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects (

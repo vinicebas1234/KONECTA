@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import logging
+
+import cv2
+import numpy as np
+
 from fastapi import APIRouter, HTTPException, Body
 from fastapi.responses import PlainTextResponse
 from starlette.concurrency import run_in_threadpool
@@ -10,6 +16,7 @@ from backend.schemas import analise_para_dict
 from backend.services import dataset_provider
 from backend.services.analysis_service import service
 from backend.services.capture_service import (
+    capturar_webcam,
     extrair_landmarks,
     iniciar_sessao,
     obter_metadados,
@@ -20,10 +27,12 @@ from backend.services.pipeline_service import (
     processar_sessao_completa,
 )
 from backend.services.recognition_service import service as recognition_service
+from backend.services.training_service import TrainingService
 from knowledge.ai_assistant import AIResearchAssistant, ProvedorAnthropic
 from knowledge.reports import ReportGenerator
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/health")
@@ -127,6 +136,26 @@ async def obter_sessao_captura(id_sessao: str) -> dict:
         return await run_in_threadpool(obter_metadados, id_sessao)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/captura/sessao/{id_sessao}/webcam")
+async def capturar_webcam_sessao(
+    id_sessao: str,
+    duracao_segundos: float = 5.0,
+) -> dict:
+    """Captura vídeo da webcam da máquina onde o backend está rodando e
+    preenche a sessão (deve ter sido criada antes via POST /captura/sessao).
+
+    Importante: esta é a webcam do HOST do backend, não a webcam do
+    navegador de quem acessa o frontend — pensado para uso local/desktop.
+    Chamada bloqueante (roda em threadpool) durante `duracao_segundos`.
+    """
+    try:
+        return await run_in_threadpool(capturar_webcam, id_sessao, duracao_segundos)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @router.post("/captura/sessao/{id_sessao}/validar")
@@ -244,3 +273,70 @@ async def reconhecer_sinal(landmarks: list = Body(...)) -> dict:
         return resultado
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Erro ao reconhecer: {str(e)}")
+
+
+@router.post("/processar-frames-opencv")
+async def processar_frames_opencv(payload: dict = Body(...)) -> dict:
+    """Processa frames e extrai features simples com OpenCV (sem MediaPipe)."""
+    try:
+        sinal = payload.get("sinal", "")
+        frames_list = payload.get("frames", [])
+
+        if not frames_list or len(frames_list) == 0:
+            return {"sucesso": False, "landmarks": [], "erro": "Sem frames"}
+
+        landmarks_result = []
+
+        for frame_data in frames_list:
+            try:
+                if isinstance(frame_data, list):
+                    frame_array = np.array(frame_data, dtype=np.uint8)
+                    if frame_array.size > 0:
+                        # Normalizar para formato de imagem (640x480x3)
+                        frame_array = frame_array.reshape(480, 640, 3) if frame_array.size == 921600 else frame_array
+
+                        # Extrair histograma como features (126 features)
+                        hist = cv2.calcHist([frame_array], [0, 1, 2], None, [7, 7, 3], [0, 256, 0, 256, 0, 256])
+                        hist = cv2.normalize(hist, hist).flatten()[:126]
+
+                        # Pad com zeros se necessário
+                        if len(hist) < 126:
+                            hist = np.pad(hist, (0, 126 - len(hist)))
+
+                        landmarks_result.append(hist.tolist())
+            except Exception as e:
+                logger.warning("Falha ao processar frame em /processar-frames-opencv: %s", e)
+
+        return {
+            "sucesso": len(landmarks_result) > 0,
+            "landmarks": landmarks_result,
+            "frames_processados": len(landmarks_result)
+        }
+
+    except Exception as e:
+        return {"sucesso": False, "landmarks": [], "erro": str(e)}
+
+
+@router.post("/treinar")
+async def treinar_modelo(dados: dict = Body(...)) -> dict:
+    """Treina novo modelo com dados capturados pelo usuário.
+
+    Parâmetros:
+    - dados: Dict com formato {'A': [[frame1], [frame2], ...], 'B': [...], ...}
+
+    Retorna:
+    - sucesso: True/False
+    - mensagem: Descrição do resultado
+    - sinais: Quantidade de sinais treinados
+    - amostras_por_sinal: Contagem de amostras por sinal
+    """
+    try:
+        resultado = await run_in_threadpool(TrainingService.treinar_modelo, dados)
+        if resultado["sucesso"]:
+            # Recarregar modelos no recognition_service
+            recognition_service._load_models()
+        return resultado
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Erro ao treinar: {str(e)}")
+
+

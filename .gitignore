@@ -1,2 +1,50 @@
-OCR/dados_libras/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+*.egg
+
+# IDE
+.vscode/
+.vscode_settings/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.venv/
+.venv2/
+.env
+.env.local
+
+# Data (largos demais para git)
 Datasets/
+*.db
+*.sqlite
+data/signlab.db
+archive/
+
+# Builds
+build/
+dist/
+*.egg-info/
+*.whl
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# Logs
+*.log
+server.log
+
+# Temporários
+cache/
+*.tmp
+*~

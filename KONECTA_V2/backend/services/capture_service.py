@@ -17,6 +17,11 @@ class CaptureService:
 
     def __init__(self):
         self._sessoes: dict[str, SessaoCaptura] = {}
+        # Guarda o CaptorVideo de cada sessao (nao so o resultado) para que a
+        # captura em si (webcam/arquivo) possa ser disparada depois de
+        # iniciar_sessao, preenchendo a MESMA sessao em vez de criar uma nova
+        # instancia "orfa" que nunca teve iniciar_sessao() chamado nela.
+        self._captores: dict[str, CaptorVideo] = {}
         self._landmarks_maos: dict[str, list[LandmarksFrame]] = {}
         self._landmarks_corpo: dict[str, list[LandmarksFrame]] = {}
         self._lock = threading.Lock()
@@ -37,6 +42,24 @@ class CaptureService:
             captor = CaptorVideo(config=self._config_padrao)
             sessao = captor.iniciar_sessao(sinal, sinalizante, id_sessao)
             self._sessoes[id_sessao] = sessao
+            self._captores[id_sessao] = captor
+            return sessao
+
+    def capturar_webcam(
+        self,
+        id_sessao: str,
+        duracao_segundos: float = 5.0,
+    ) -> SessaoCaptura:
+        """Captura vídeo da webcam da máquina onde o backend está rodando
+        e preenche a sessão já criada por `iniciar_sessao`."""
+        with self._lock:
+            captor = self._captores.get(id_sessao)
+            if captor is None:
+                raise ValueError(
+                    f"Sessão '{id_sessao}' não encontrada — chame iniciar_sessao antes"
+                )
+            sessao = captor.capturar_da_webcam(duracao_segundos)
+            self._sessoes[id_sessao] = sessao
             return sessao
 
     def capturar_arquivo(
@@ -44,12 +67,14 @@ class CaptureService:
         id_sessao: str,
         caminho_arquivo: Path,
     ) -> SessaoCaptura:
-        """Processa um arquivo de vídeo já existente."""
+        """Processa um arquivo de vídeo já existente, preenchendo a sessão
+        já criada por `iniciar_sessao`."""
         with self._lock:
-            if id_sessao not in self._sessoes:
-                raise ValueError(f"Sessão '{id_sessao}' não encontrada")
-
-            captor = CaptorVideo(config=self._config_padrao)
+            captor = self._captores.get(id_sessao)
+            if captor is None:
+                raise ValueError(
+                    f"Sessão '{id_sessao}' não encontrada — chame iniciar_sessao antes"
+                )
             sessao = captor.capturar_do_arquivo(caminho_arquivo)
             self._sessoes[id_sessao] = sessao
             return sessao
@@ -139,6 +164,7 @@ class CaptureService:
         """Limpa uma sessão e seus dados associados."""
         with self._lock:
             self._sessoes.pop(id_sessao, None)
+            self._captores.pop(id_sessao, None)
             self._landmarks_maos.pop(id_sessao, None)
             self._landmarks_corpo.pop(id_sessao, None)
 
@@ -184,6 +210,18 @@ def iniciar_sessao(
         "id": sessao.id,
         "sinal": sessao.sinal,
         "sinalizante": sessao.sinalizante,
+    }
+
+
+def capturar_webcam(id_sessao: str, duracao_segundos: float = 5.0) -> dict:
+    """Interface pública: captura da webcam do host onde o backend roda."""
+    sessao = _capture_service.capturar_webcam(id_sessao, duracao_segundos)
+    return {
+        "id": sessao.id,
+        "n_frames": sessao.n_frames,
+        "duracao_segundos": sessao.duracao_segundos,
+        "fps_realizado": sessao.fps_realizado,
+        "qualidade_media_luz": sessao.qualidade_media_luz,
     }
 
 

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Texto para Libras</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0;
+    font-family: system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    gap: 1.5rem;
+  }
+  h1 { font-size: 1.25rem; font-weight: 600; margin: 0; }
+  #status { font-size: .85rem; opacity: .7; margin: 0; }
+  #status.on { color: #16a34a; opacity: 1; }
+  #status.off { color: #dc2626; opacity: 1; }
+  #texto {
+    font-size: 2rem;
+    font-weight: 600;
+    text-align: center;
+    max-width: 22ch;
+    min-height: 1.2em;
+    padding: 1rem 1.5rem;
+    border: 2px dashed color-mix(in srgb, currentColor 25%, transparent);
+    border-radius: .75rem;
+  }
+</style>
+</head>
+<body>
+  <h1>Texto para Libras</h1>
+  <p id="status">conectando…</p>
+  <div id="texto"></div>
+
+  <div vw class="enabled">
+    <div vw-access-button class="active"></div>
+    <div vw-plugin-wrapper>
+      <div class="vw-plugin-top-wrapper"></div>
+    </div>
+  </div>
+
+  <script src="https://vlibras.gov.br/app/vlibras-plugin.js"></script>
+  <script>new window.VLibras.Widget('https://vlibras.gov.br/app');</script>
+  <script src="app.js"></script>
+</body>
+</html>

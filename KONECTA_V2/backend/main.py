@@ -9,11 +9,21 @@ Ou de qualquer lugar:
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.routes import router
 from backend.api.ws import router as ws_router
+
+# Carrega variaveis de ambiente (ANTHROPIC_API_KEY, etc.) de um .env local,
+# se existir. Antes disso era preciso exportar a variavel manualmente no
+# shell para o AI Research Assistant funcionar.
+_RAIZ_V2 = Path(__file__).resolve().parent.parent
+load_dotenv(_RAIZ_V2 / ".env.local")
+load_dotenv(_RAIZ_V2 / ".env")
 
 app = FastAPI(
     title="KONECTA V2 API",
