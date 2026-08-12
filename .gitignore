@@ -31,6 +31,17 @@ build/
 dist/
 *.egg-info/
 *.whl
+node_modules/
+
+# Projetos com repositorio git proprio (versionados a parte, nao sao submodulos)
+KONECTA_V3/
+KONECTA_V3_ui/
+
+# Metadados de ferramenta
+.serena/
+
+# Empacotamentos (o conteudo ja vive versionado na pasta correspondente)
+*.rar
 
 # OS
 .DS_Store
