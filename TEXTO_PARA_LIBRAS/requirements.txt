@@ -1,0 +1,30 @@
+# Texto para Libras — dependências
+#
+# Versões mínimas batem com o que está rodando hoje na máquina de desenvolvimento.
+#
+#   pip install -r requirements.txt
+#
+# Nada aqui é opcional: o app sobe servidor, janela, avatar e escuta de áudio
+# no mesmo processo.
+
+# Janela e avatar embutido
+# O PyQtWebEngine carrega ~150MB de Chromium — é ele que renderiza o avatar 3D.
+PyQt5>=5.15.11
+PyQtWebEngine>=5.15.7
+
+# Servidor que serve a página e distribui o texto (server.py)
+fastapi>=0.115.0
+uvicorn>=0.30.0
+pydantic>=2.0.0
+
+# Cliente WebSocket para outro código Python mandar texto (cliente.py)
+websockets>=13.0
+
+# Captura do áudio do PC e transcrição local (transcricao_tempo_real.py)
+# webrtcvad-wheels é o mesmo webrtcvad com wheel pré-compilada para Windows;
+# o pacote original exige o MS C++ Build Tools para compilar.
+faster-whisper>=1.0.0
+soundcard>=0.4.5
+webrtcvad-wheels>=2.0.10
+numpy>=1.24.0
+requests>=2.31.0
