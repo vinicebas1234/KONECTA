@@ -1,0 +1,120 @@
+{
+  "overall": {
+    "mean_score": 9.97,
+    "min_score": 9.71,
+    "fail_under": 8.0,
+    "pass": true
+  },
+  "files": {
+    "main.py": {
+      "score": 10.0,
+      "message_count": 0,
+      "by_type": {
+        "convention": 0,
+        "refactor": 0,
+        "warning": 0,
+        "error": 0,
+        "fatal": 0
+      }
+    },
+    "motors/motor_konecta_v3.py": {
+      "score": 10.0,
+      "message_count": 0,
+      "by_type": {
+        "convention": 0,
+        "refactor": 0,
+        "warning": 0,
+        "error": 0,
+        "fatal": 0
+      }
+    },
+    "motors/motor_claude_logic.py": {
+      "score": 10.0,
+      "message_count": 0,
+      "by_type": {
+        "convention": 0,
+        "refactor": 0,
+        "warning": 0,
+        "error": 0,
+        "fatal": 0
+      }
+    },
+    "motors/motor_gemini_vision.py": {
+      "score": 10.0,
+      "message_count": 0,
+      "by_type": {
+        "convention": 0,
+        "refactor": 0,
+        "warning": 0,
+        "error": 0,
+        "fatal": 0
+      }
+    },
+    "motors/motor_grok_context.py": {
+      "score": 9.71,
+      "message_count": 13,
+      "by_type": {
+        "convention": 4,
+        "refactor": 7,
+        "warning": 2,
+        "error": 0,
+        "fatal": 0
+      }
+    },
+    "motors/pattern_analysis_demo.py": {
+      "score": 10.0,
+      "message_count": 0,
+      "by_type": {
+        "convention": 0,
+        "refactor": 0,
+        "warning": 0,
+        "error": 0,
+        "fatal": 0
+      }
+    },
+    "motors/test_grok_context.py": {
+      "score": 9.95,
+      "message_count": 1,
+      "by_type": {
+        "convention": 1,
+        "refactor": 0,
+        "warning": 0,
+        "error": 0,
+        "fatal": 0
+      }
+    },
+    "pipeline/recognizer_pipeline.py": {
+      "score": 10.0,
+      "message_count": 0,
+      "by_type": {
+        "convention": 0,
+        "refactor": 0,
+        "warning": 0,
+        "error": 0,
+        "fatal": 0
+      }
+    },
+    "utils/metrics.py": {
+      "score": 10.0,
+      "message_count": 0,
+      "by_type": {
+        "convention": 0,
+        "refactor": 0,
+        "warning": 0,
+        "error": 0,
+        "fatal": 0
+      }
+    },
+    "utils/video_capture.py": {
+      "score": 10.0,
+      "message_count": 0,
+      "by_type": {
+        "convention": 0,
+        "refactor": 0,
+        "warning": 0,
+        "error": 0,
+        "fatal": 0
+      }
+    }
+  }
+}

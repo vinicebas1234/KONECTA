@@ -33,8 +33,18 @@ dist/
 *.whl
 node_modules/
 
-# Projetos com repositorio git proprio (versionados a parte, nao sao submodulos)
-KONECTA_V3/
+# KONECTA_V3 entra no repositorio, menos os artefatos pesados:
+# ambientes virtuais, modelos treinados e caches sao gerados, nao codigo.
+KONECTA_V3/.venv/
+KONECTA_V3/.venv-temporal/
+KONECTA_V3/.git.repo-local-backup/
+KONECTA_V3/models/*
+!KONECTA_V3/models/LEIA-ME.md
+KONECTA_V3/logs/
+KONECTA_V3/.mypy_cache/
+KONECTA_V3/.pytest_cache/
+KONECTA_V3/test_coverage_report.html/
+KONECTA_V3/app_backend/data/
 KONECTA_V3_ui/
 
 # Metadados de ferramenta

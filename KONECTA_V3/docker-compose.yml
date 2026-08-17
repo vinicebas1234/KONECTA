@@ -1,0 +1,50 @@
+version: '3.9'
+
+services:
+  konecta-v3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: konecta-v3-api
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=INFO
+      - WORKERS=4
+    volumes:
+      - ./data:/app/data
+      - ./experiments:/app/experiments
+      - ./models:/app/models
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - konecta
+
+  # Optional: Prometheus for monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: konecta-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    networks:
+      - konecta
+    depends_on:
+      - konecta-v3
+
+volumes:
+  prometheus_data:
+
+networks:
+  konecta:
+    driver: bridge

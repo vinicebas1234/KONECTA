@@ -1,0 +1,58 @@
+# Core
+numpy>=1.24.0,<2.0
+pandas>=1.5.0,<2.0
+opencv-python>=4.7.0
+opencv-contrib-python>=4.7.0
+mediapipe>=0.8.11
+
+# Web framework
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+websockets>=11.0
+pydantic>=2.0.0
+
+# Data processing
+scikit-learn>=1.2.0
+scipy>=1.10.0
+PyYAML>=6.0
+
+# Interface desktop (app_central)
+PyQt5>=5.15.0
+
+# Providers e infraestrutura
+joblib>=1.3.0          # carrega os modelos exportados pelo SIGNLAB
+aiohttp>=3.9.0         # cliente do avatar e das APIs de legenda
+keyring>=24.0.0        # credenciais no Gerenciador do Windows (nunca em arquivo)
+
+# Áudio → texto (opcional: só com KONECTA_AUDIO_ATIVO=true)
+faster-whisper>=1.0.0
+soundcard>=0.4.5
+webrtcvad-wheels>=2.0.10  # wheel pré-compilada; o webrtcvad original exige MSVC
+
+# Modelos temporais do SIGNLAB (.keras). Sem isto, só os estáticos funcionam.
+# keras>=3.0.0
+# tensorflow>=2.15.0
+
+# Utilities
+python-dotenv>=1.0.0
+tqdm>=4.65.0
+click>=8.1.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-xdist>=3.3.0
+pytest-timeout>=2.1.0
+httpx>=0.24.0
+
+# Code Quality
+flake8>=6.0.0
+black>=23.7.0
+isort>=5.12.0
+
+# Monitoring
+prometheus-client>=0.17.0
+python-json-logger>=2.0.7
+
+# Production
+gunicorn>=20.1.0

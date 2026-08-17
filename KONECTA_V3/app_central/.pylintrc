@@ -1,0 +1,32 @@
+[MASTER]
+fail-under=8.0
+jobs=1
+persistent=no
+
+[MESSAGES CONTROL]
+disable=
+    C0301,        ; line-too-long: box-drawing/docstring ASCII art is intentional
+    W1203,        ; logging-fstring-interpolation: f-strings in logs are idiomatic here
+    R0801,        ; duplicate-code: parallel structure across motors is intentional
+    E0401,        ; import-error: optional deps (mediapipe, tensorflow, pyaudio) handled lazily
+    R0903,        ; too-few-public-methods: dataclasses/models are intentionally thin
+    W0621,        ; redefined-outer-name: pytest fixtures use the same name as args
+    C0103,        ; invalid-name: existing naming conventions preserved for compat
+    R0917,        ; too-many-positional-arguments: public API signatures are frozen
+    E1101,        ; no-member: cv2/mediapipe C-extension members not visible to astroid
+    E0611,        ; no-name-in-module: PyQt5 has no .pyi stubs, members are dynamic
+    C0415,        ; import-outside-toplevel: heavy/optional deps imported lazily on purpose
+    R0902,        ; too-many-instance-attributes: stateful motors/dataclasses/GUI widgets
+    W0718,        ; broad-exception-caught: defensive resilience on external/IO boundaries
+
+[FORMAT]
+max-line-length=120
+expected-line-ending-format=LF
+
+[BASIC]
+good-names=logger,i,j,k,e,ex,Run,_,ok,ret,fp
+docstring-min-length=5
+
+[REPORTS]
+output-format=text
+score=yes

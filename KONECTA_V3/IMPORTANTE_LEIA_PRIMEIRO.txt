@@ -1,0 +1,141 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║                    ⚠️  LEIA ANTES DE ENVIAR PARA OS AGENTS ⚠️               ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+🔴 NUNCA MEXER EM SIGNLAB!
+
+SIGNLAB está funcionando perfeitamente em produção:
+✅ Interface web funcionando (localhost:8100)
+✅ Treino de modelos funcionando
+✅ Exportação de modelos funcionando
+✅ Histórico de experimentos funcionando
+
+DEIXAR INTOCADO:
+  ❌ C:\KONECTA\SIGNLAB\
+  ❌ Arquivos do SIGNLAB
+  ❌ Banco de dados do SIGNLAB
+  ❌ Configurações do SIGNLAB
+
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ APENAS DESENVOLVER EM KONECTA V3
+
+KONECTA V3 é a NOVA camada de reconhecimento que:
+✅ Consome modelos exportados do SIGNLAB
+✅ Implementa múltiplas IAs (Claude, Gemini, Grok, etc)
+✅ Fornece API para integração com N8N
+✅ Roda como aplicação desktop independente
+
+TRABALHAR APENAS EM:
+  ✅ C:\KONECTA\KONECTA_V3\
+  ✅ Código Python novo
+  ✅ Configurações de KONECTA V3
+  ✅ Banco de dados de KONECTA V3
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🏗️ ARQUITETURA SEPARADA
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│                           SIGNLAB (Treino)                                │
+│                                                                            │
+│  • Web interface (PyTorch backend)                                        │
+│  • Upload de vídeos/imagens                                              │
+│  • Treino de modelos (RF, MLP, BiLSTM, LSTM)                            │
+│  • Exportação de modelos (.joblib, .keras)                              │
+│                                                                            │
+│  ❌ NÃO MEXER - DEIXAR COMO ESTÁ                                         │
+└────────────────────────────────────────────────────────────────────────────┘
+                                   ↓
+                        (Modelos exportados)
+                                   ↓
+┌────────────────────────────────────────────────────────────────────────────┐
+│                        KONECTA V3 (Reconhecimento)                        │
+│                                                                            │
+│  • Desktop app (PyQt5)                                                   │
+│  • Multi-IA pipeline (Claude, Gemini, Grok, Codex)                      │
+│  • Reconhecimento em tempo real                                          │
+│  • API REST para integração N8N                                          │
+│  • Cache local + histórico                                               │
+│                                                                            │
+│  ✅ DESENVOLVER AQUI - TODO O TRABALHO NOVO                             │
+└────────────────────────────────────────────────────────────────────────────┘
+                                   ↓
+                            (Webhooks para)
+                                   ↓
+┌────────────────────────────────────────────────────────────────────────────┐
+│                         N8N (Orquestração)                                │
+│                                                                            │
+│  • Lógica de integração                                                  │
+│  • Speech-to-Text (seu colega)                                          │
+│  • Text-to-Sign (outro colega)                                          │
+│  • Comunicação bidirecional                                             │
+│                                                                            │
+│  (Trabalho de vocês em paralelo)                                        │
+└────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📋 CHECKLIST ANTES DE ENVIAR PARA OS AGENTS
+
+Antes de usar os scripts em AGENT_SCRIPTS.md, verifique:
+
+[ ] SIGNLAB está rodando em http://localhost:8100 (se quiser testar)
+[ ] Entendi que NÃO MEXO em SIGNLAB
+[ ] Entendi que SÓ DESENVOLVIMENTO em KONECTA_V3
+[ ] Li os scripts em AGENT_SCRIPTS.md
+[ ] Estou pronto para enviar para os agents
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🚀 PRÓXIMAS AÇÕES
+
+1. CONFIRMAR: Você entendeu a separação entre SIGNLAB e KONECTA V3?
+
+2. EXECUTAR: Copiar scripts de AGENT_SCRIPTS.md para os agents do Orca
+
+3. MONITORAR: Acompanhar o progresso via Orca worktrees
+
+4. MESCLAR: Quando agents terminarem, fazer PR para merge
+
+═══════════════════════════════════════════════════════════════════════════════
+
+❓ DÚVIDAS COMUNS
+
+P: "Posso mexer em SIGNLAB para melhorar?"
+R: NÃO! SIGNLAB está pronto. Desenvolver em KONECTA V3 ao invés.
+
+P: "Preciso do modelo exportado do SIGNLAB?"
+R: SIM! Copie para C:\KONECTA\KONECTA_V3\models\v1\
+
+P: "E se encontrar um bug no SIGNLAB?"
+R: Anote, mas NÃO MEXE. Pode afetar o treino em progresso.
+
+P: "Posso copiar código do SIGNLAB para KONECTA V3?"
+R: SIM! Reutilize MediaPipe, utils, etc. Mas apenas COPIE, não MODIFIQUE original.
+
+═══════════════════════════════════════════════════════════════════════════════
+
+✉️ CONTATO
+
+Dúvidas sobre separação?
+→ Releia este arquivo
+→ Leia AGENT_SCRIPTS.md
+→ Converse com seu grupo
+
+Pronto para começar?
+→ Copie um script de AGENT_SCRIPTS.md
+→ Abra Orca (Ctrl+Shift+W)
+→ Crie worktree
+→ Mande! 🚀
+
+═══════════════════════════════════════════════════════════════════════════════
+
+Criado: 2026-08-11
+Status: PRONTO PARA PRODUÇÃO
+Autor: Vinicius
+
+NÃO ESQUEÇA: SIGNLAB = DEIXA COMO ESTÁ 🚫
+             KONECTA V3 = DESENVOLVE AQUI ✅

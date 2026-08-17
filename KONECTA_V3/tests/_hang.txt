@@ -1,0 +1,20 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.4, pytest-9.1.1, pluggy-1.6.0 -- C:\KONECTA\KONECTA_V3\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+metadata: {'Python': '3.11.4', 'Platform': 'Windows-10-10.0.26200-SP0', 'Packages': {'pytest': '9.1.1', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.14.2', 'cov': '7.1.0', 'html': '4.2.0', 'metadata': '3.1.1'}}
+rootdir: C:\KONECTA\KONECTA_V3
+configfile: pytest.ini
+plugins: anyio-4.14.2, cov-7.1.0, html-4.2.0, metadata-3.1.1
+collecting ... collected 38 items
+
+tests/test_video_capture.py::test_open_camera_configures_props PASSED    [  2%]
+tests/test_video_capture.py::test_open_camera_raises_when_not_opened PASSED [  5%]
+tests/test_video_capture.py::test_capture_loop_emits_frame_and_breaks_on_error PASSED [  7%]
+tests/test_video_capture.py::test_capture_loop_respects_is_running PASSED [ 10%]
+tests/test_video_capture.py::test_capture_loop_without_cap_raises PASSED [ 13%]
+tests/test_video_capture.py::test_close_camera_releases PASSED           [ 15%]
+tests/test_video_capture.py::test_run_emits_error_when_open_fails PASSED [ 18%]
+tests/test_video_capture.py::test_stop_sets_flag PASSED                  [ 21%]
+tests/test_video_capture.py::test_audio_open_stream_configures_input PASSED [ 23%]
+tests/test_video_capture.py::test_audio_loop_emits_audio_ready PASSED    [ 26%]
+tests/test_video_capture.py::test_audio_loop_read_error_warns_and_continues 

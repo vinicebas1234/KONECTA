@@ -1,0 +1,25 @@
+{
+  "config": {
+    "name": "experiment_1",
+    "description": "First experiment",
+    "features_type": "RAW_XYZ",
+    "model_type": "RandomForest",
+    "dataset_name": "V-LIBRASIL",
+    "hyperparams": {},
+    "version": "V3"
+  },
+  "timestamp": 1785848330.129374,
+  "datetime": "2026-08-04T12:58:50.129374",
+  "train_metrics": {
+    "accuracy": 0.9,
+    "f1": 0.88
+  },
+  "val_metrics": null,
+  "test_metrics": {
+    "accuracy": 0.85,
+    "f1": 0.83
+  },
+  "cross_signer_metrics": null,
+  "training_time": 0.0,
+  "notes": ""
+}

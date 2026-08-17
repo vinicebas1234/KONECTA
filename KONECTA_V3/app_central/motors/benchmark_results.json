@@ -1,0 +1,31 @@
+{
+  "benchmark": "MotorKonectaV3.benchmark_performance",
+  "run_date": "2026-08-11",
+  "frames": 100,
+  "avg_latency_ms": 1.064565,
+  "p50_latency_ms": 0.98625,
+  "p95_latency_ms": 1.15629,
+  "p99_latency_ms": 3.375323,
+  "fps": 939.350815,
+  "status_counts": {
+    "success": 100
+  },
+  "avg_stage_ms": {
+    "model_load": 0.0001,
+    "cache_lookup": 0.9296,
+    "landmarks": 0.0,
+    "inference": 0.0139
+  },
+  "cache": {
+    "hits": 99,
+    "misses": 1
+  },
+  "accuracy_validation": {
+    "passed": true,
+    "expected_signal": "SINAL_7",
+    "observed_signal": "SINAL_7",
+    "confidence": 0.8
+  },
+  "environment": "CPU; deterministic fake MediaPipe detector and sklearn-compatible classifier",
+  "limitation": "Os artefatos classifier.joblib, metadata.json e sequence_model.keras do SIGNLAB nao estavam presentes no workspace; execute novamente com os modelos reais antes de aceitar a meta de producao."
+}

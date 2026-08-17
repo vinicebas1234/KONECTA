@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KONECTA V3 - Web Interface</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎯 KONECTA V3 - Teach & Recognize</h1>
+            <p>Ensine sinais em tempo real via webcam</p>
+        </header>
+
+        <div class="main-grid">
+            <!-- Camera -->
+            <div class="camera-section">
+                <div class="video-container">
+                    <video id="video" autoplay playsinline></video>
+                    <canvas id="canvas" style="display: none;"></canvas>
+                    <div id="status" class="status">Inicializando câmera...</div>
+                </div>
+            </div>
+
+            <!-- Control Panel -->
+            <div class="control-section">
+                <!-- Mode Selector -->
+                <div class="panel">
+                    <h2>📋 Modo</h2>
+                    <div class="mode-selector">
+                        <button class="mode-btn active" data-mode="train">
+                            ✏️ TREINAR
+                        </button>
+                        <button class="mode-btn" data-mode="recognize">
+                            🎯 RECONHECER
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Train Section -->
+                <div id="train-section" class="panel active-section">
+                    <h2>📚 Ensinar</h2>
+
+                    <div class="form-group">
+                        <label>Classe:</label>
+                        <select id="classInput">
+                            <option value="CASA">CASA</option>
+                            <option value="CARRO">CARRO</option>
+                            <option value="LIVRO">LIVRO</option>
+                            <option value="AMAR">AMAR</option>
+                            <option value="APRENDER">APRENDER</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Tipo de Captura:</label>
+                        <div class="radio-group">
+                            <label>
+                                <input type="radio" name="captureMode" value="single" checked>
+                                Um Frame
+                            </label>
+                            <label>
+                                <input type="radio" name="captureMode" value="continuous">
+                                Contínuo (5 frames)
+                            </label>
+                        </div>
+                    </div>
+
+                    <button id="captureBtn" class="btn btn-primary">📷 Capturar</button>
+                    <button id="trainBtn" class="btn btn-success">🚀 Treinar Modelo</button>
+                    <button id="clearBtn" class="btn btn-danger">🗑️ Limpar Dados</button>
+
+                    <div id="stats" class="stats-box">
+                        <p><strong>Frames capturados:</strong> <span id="frameCount">0</span></p>
+                        <p><strong>Por classe:</strong></p>
+                        <div id="classBreakdown"></div>
+                    </div>
+
+                    <div id="trainResults" class="results-box" style="display: none;">
+                        <h3>✅ Modelo Treinado!</h3>
+                        <p>Acurácia: <strong id="accuracy">-</strong></p>
+                        <p>F1-Score: <strong id="f1score">-</strong></p>
+                    </div>
+                </div>
+
+                <!-- Recognize Section -->
+                <div id="recognize-section" class="panel">
+                    <h2>🎯 Reconhecer</h2>
+
+                    <div class="recognition-display">
+                        <div class="prediction">
+                            <p>Predição:</p>
+                            <h3 id="prediction">-</h3>
+                        </div>
+                        <div class="confidence">
+                            <p>Confiança:</p>
+                            <h3 id="confidence">-</h3>
+                        </div>
+                    </div>
+
+                    <div id="history" class="history-box">
+                        <h3>📊 Histórico</h3>
+                        <div id="historyList"></div>
+                    </div>
+                </div>
+
+                <!-- Stats -->
+                <div class="panel">
+                    <h2>📈 Performance</h2>
+                    <div class="stats-box">
+                        <p>FPS: <span id="fps">0</span></p>
+                        <p>Latência: <span id="latency">0</span>ms</p>
+                        <p>Status: <span id="apiStatus">Conectando...</span></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+# KONECTA V3 — Backend stack
+# Uso (a partir de app_backend/):
+#   docker compose up --build
+# Ou a partir do repo root:
+#   docker compose -f app_backend/docker-compose.yml up --build
+#
+# Default: SQLite em volume. Descomente o serviço `postgres` para produção.
+
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: app_backend/docker/Dockerfile
+    container_name: konecta-backend
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      KONECTA_API_KEY: ${KONECTA_API_KEY:-dev-konecta-api-key-change-me}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173,http://localhost:8000}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////app/app_backend/data/konecta.db}
+      LOG_JSON: ${LOG_JSON:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      RATE_LIMIT: ${RATE_LIMIT:-100/minute}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      APP_VERSION: "1.0.0"
+    volumes:
+      - konecta_data:/app/app_backend/data
+      - konecta_logs:/app/app_backend/logs
+      - konecta_backups:/app/app_backend/backups
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    # depends_on:
+    #   postgres:
+    #     condition: service_healthy
+
+  # --- Opcional: PostgreSQL (produção) ---
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: konecta-postgres
+  #   environment:
+  #     POSTGRES_USER: ${POSTGRES_USER:-konecta}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-konecta}
+  #     POSTGRES_DB: ${POSTGRES_DB:-konecta}
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - konecta_pg:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-konecta}"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   restart: unless-stopped
+
+volumes:
+  konecta_data:
+  konecta_logs:
+  konecta_backups:
+  # konecta_pg:

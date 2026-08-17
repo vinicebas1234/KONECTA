@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KONECTA V3 — Vision Lab</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div id="app" class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">🔬 Vision Lab</div>
+            <nav class="nav">
+                <button class="nav-item active" data-tab="dataset">Dataset</button>
+                <button class="nav-item" data-tab="videos">Vídeos</button>
+                <button class="nav-item" data-tab="landmarks">Landmarks</button>
+                <button class="nav-item" data-tab="quality">Qualidade</button>
+            </nav>
+        </aside>
+
+        <!-- Main content -->
+        <main class="main">
+            <!-- Dashboard Tab -->
+            <section id="dataset" class="tab-content active">
+                <h1>📊 Dataset Discovery</h1>
+
+                <div class="form-group">
+                    <label for="dataset-path">Dataset Path:</label>
+                    <input type="text" id="dataset-path" placeholder="C:\KONECTA\Datasets\videos UFPE (V-LIBRASIL)">
+                    <button id="btn-discover" class="btn btn-primary">Discover</button>
+                </div>
+
+                <div id="dataset-info" class="card hidden">
+                    <h2>Dataset Info</h2>
+                    <div class="grid-2">
+                        <div class="stat">
+                            <div class="stat-value" id="stat-videos">0</div>
+                            <div class="stat-label">Videos</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value" id="stat-classes">0</div>
+                            <div class="stat-label">Classes</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value" id="stat-signers">0</div>
+                            <div class="stat-label">Signers</div>
+                        </div>
+                    </div>
+
+                    <h3>Top Classes</h3>
+                    <div id="class-distribution" class="chart"></div>
+                </div>
+
+                <div id="loading-indicator" class="loading hidden">
+                    <div class="spinner"></div>
+                    <p>Discovering dataset...</p>
+                </div>
+            </section>
+
+            <!-- Videos Tab -->
+            <section id="videos" class="tab-content">
+                <h1>🎬 Video List</h1>
+
+                <div class="form-group">
+                    <input type="text" id="video-filter" placeholder="Filter by class or signer">
+                </div>
+
+                <div id="video-list" class="video-grid">
+                    <p class="placeholder">No videos loaded. Discover a dataset first.</p>
+                </div>
+            </section>
+
+            <!-- Landmarks Tab -->
+            <section id="landmarks" class="tab-content">
+                <h1>📍 Landmark Extraction</h1>
+
+                <div id="landmark-viewer" class="hidden">
+                    <div class="viewer-container">
+                        <div class="video-player">
+                            <img id="frame-image" alt="Frame" style="width: 100%; max-width: 640px;">
+                            <div class="controls">
+                                <button id="btn-prev" class="btn btn-sm">← Prev</button>
+                                <input type="range" id="frame-slider" min="0" max="100" value="0" class="slider">
+                                <button id="btn-next" class="btn btn-sm">Next →</button>
+                            </div>
+                            <div class="frame-info">
+                                Frame <span id="current-frame">0</span> / <span id="total-frames">0</span>
+                            </div>
+                        </div>
+
+                        <div class="landmarks-info">
+                            <h3>Extraction Status</h3>
+                            <div class="stats-table">
+                                <div class="stat-row">
+                                    <span>Valid Frames:</span>
+                                    <strong id="stat-valid-frames">-</strong>
+                                </div>
+                                <div class="stat-row">
+                                    <span>Detection Rate:</span>
+                                    <strong id="stat-detection-rate">-</strong>
+                                </div>
+                                <div class="stat-row">
+                                    <span>Avg Confidence:</span>
+                                    <strong id="stat-avg-confidence">-</strong>
+                                </div>
+                            </div>
+
+                            <h3>Temporal Analysis</h3>
+                            <div id="stat-temporal" class="stats-table">
+                                <p style="color: var(--text-light); font-size: 0.85rem;">Extract landmarks to see temporal data</p>
+                            </div>
+
+                            <h3>Frame Quality</h3>
+                            <div class="quality-display">
+                                <div class="quality-score">
+                                    <span id="frame-quality-score">-</span>
+                                    <span class="quality-max">/100</span>
+                                </div>
+                                <div id="frame-quality-status" class="quality-status">-</div>
+                                <div id="frame-quality-issues" class="quality-issues"></div>
+                            </div>
+
+                            <label style="margin-top: 1rem; display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                                <input type="checkbox" id="toggle-landmarks">
+                                <span>Show Landmarks Overlay</span>
+                            </label>
+
+                            <button id="btn-extract-landmarks" class="btn btn-primary full-width">
+                                Extract Landmarks
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <p id="landmark-placeholder" class="placeholder">Select a video to view landmarks.</p>
+            </section>
+
+            <!-- Quality Tab -->
+            <section id="quality" class="tab-content">
+                <h1>✅ Quality Analysis</h1>
+                <p class="placeholder">Coming in Phase 2...</p>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

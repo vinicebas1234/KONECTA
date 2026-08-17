@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Vision Lab Backend",
+      "runtimeExecutable": ".venv\\Scripts\\python",
+      "runtimeArgs": ["-m", "uvicorn", "vision_lab.app:app", "--reload", "--port", "8000"],
+      "port": 8000,
+      "url": "http://localhost:8000"
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+# KONECTA V3 — Backend-specific dependencies
+# Install: pip install -r app_backend/requirements.txt
+# (Root requirements.txt already has fastapi/uvicorn/sqlalchemy-related stacks;
+#  this file lists backend extras.)
+
+# Framework / ASGI
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+python-multipart>=0.0.6
+python-dotenv>=1.0.0
+
+# Settings / validation
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# ORM / DB
+sqlalchemy>=2.0.0
+alembic>=1.12.0
+psycopg2-binary>=2.9.0
+
+# Auth / rate limit
+slowapi>=0.1.9
+
+# Logging / monitoring
+prometheus-client>=0.17.0
+python-json-logger>=2.0.7
+# sentry-sdk[fastapi]>=1.39.0  # optional — enable when SENTRY_DSN is set
+
+# HTTP client (tests / health probes)
+httpx>=0.24.0

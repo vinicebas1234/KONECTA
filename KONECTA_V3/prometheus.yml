@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'konecta-v3'
+
+scrape_configs:
+  - job_name: 'konecta-v3'
+    static_configs:
+      - targets: ['konecta-v3:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 15s

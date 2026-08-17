@@ -1,0 +1,190 @@
+{
+  "config": {
+    "name": "manual_test_velocity",
+    "description": "Manual test with VELOCITY features",
+    "features_type": "VELOCITY",
+    "model_type": "RandomForest",
+    "dataset_name": "synthetic",
+    "hyperparams": {
+      "n_estimators": 10
+    },
+    "version": "V3"
+  },
+  "timestamp": 1785846253.9453623,
+  "datetime": "2026-08-04T09:24:13.945362",
+  "train_metrics": {
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "class_report": {
+      "CARRO": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 23.0
+      },
+      "CASA": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 24.0
+      },
+      "LIVRO": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 23.0
+      },
+      "accuracy": 1.0,
+      "macro avg": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 70.0
+      },
+      "weighted avg": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 70.0
+      }
+    },
+    "confusion_matrix": [
+      [
+        23,
+        0,
+        0
+      ],
+      [
+        0,
+        24,
+        0
+      ],
+      [
+        0,
+        0,
+        23
+      ]
+    ],
+    "n_samples": 70,
+    "val": {
+      "accuracy": 0.5,
+      "precision": 0.65,
+      "recall": 0.5,
+      "f1": 0.52,
+      "class_report": {
+        "CARRO": {
+          "precision": 1.0,
+          "recall": 0.5,
+          "f1-score": 0.6666666666666666,
+          "support": 4.0
+        },
+        "CASA": {
+          "precision": 0.3333333333333333,
+          "recall": 0.6666666666666666,
+          "f1-score": 0.4444444444444444,
+          "support": 3.0
+        },
+        "LIVRO": {
+          "precision": 0.5,
+          "recall": 0.3333333333333333,
+          "f1-score": 0.4,
+          "support": 3.0
+        },
+        "accuracy": 0.5,
+        "macro avg": {
+          "precision": 0.611111111111111,
+          "recall": 0.49999999999999994,
+          "f1-score": 0.5037037037037037,
+          "support": 10.0
+        },
+        "weighted avg": {
+          "precision": 0.65,
+          "recall": 0.5,
+          "f1-score": 0.52,
+          "support": 10.0
+        }
+      },
+      "confusion_matrix": [
+        [
+          2,
+          2,
+          0
+        ],
+        [
+          0,
+          2,
+          1
+        ],
+        [
+          0,
+          2,
+          1
+        ]
+      ],
+      "n_samples": 10
+    }
+  },
+  "val_metrics": null,
+  "test_metrics": {
+    "accuracy": 0.55,
+    "precision": 0.575,
+    "recall": 0.55,
+    "f1": 0.5483065953654188,
+    "class_report": {
+      "CARRO": {
+        "precision": 0.4,
+        "recall": 0.3333333333333333,
+        "f1-score": 0.36363636363636365,
+        "support": 6.0
+      },
+      "CASA": {
+        "precision": 0.5,
+        "recall": 0.7142857142857143,
+        "f1-score": 0.5882352941176471,
+        "support": 7.0
+      },
+      "LIVRO": {
+        "precision": 0.8,
+        "recall": 0.5714285714285714,
+        "f1-score": 0.6666666666666666,
+        "support": 7.0
+      },
+      "accuracy": 0.55,
+      "macro avg": {
+        "precision": 0.5666666666666668,
+        "recall": 0.5396825396825397,
+        "f1-score": 0.5395127748068925,
+        "support": 20.0
+      },
+      "weighted avg": {
+        "precision": 0.575,
+        "recall": 0.55,
+        "f1-score": 0.5483065953654188,
+        "support": 20.0
+      }
+    },
+    "confusion_matrix": [
+      [
+        2,
+        3,
+        1
+      ],
+      [
+        2,
+        5,
+        0
+      ],
+      [
+        1,
+        2,
+        4
+      ]
+    ],
+    "n_samples": 20
+  },
+  "cross_signer_metrics": null,
+  "training_time": 0.01804351806640625,
+  "notes": ""
+}

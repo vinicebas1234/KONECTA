@@ -1,0 +1,36 @@
+app:
+  name: "KONECTA Intelligence Hub"
+  version: "1.0.0"
+  window:
+    floating: true
+    always_on_top: true
+    width: 500
+    height: 400
+
+motors:
+  konecta_v3:
+    enabled: true
+    model_path: "models/v1"
+    timeout_ms: 150
+    priority: "primary"
+
+  claude_logic:
+    enabled: true
+    timeout_ms: 500
+    priority: "fallback"
+    trigger_confidence_range: [0.7, 0.85]
+
+pipeline:
+  parallel_processing: true
+  cache_enabled: true
+  cache_ttl_seconds: 3600
+  confidence_threshold: 0.7
+
+logging:
+  level: "INFO"
+  file: "logs/app_central.log"
+
+performance:
+  target_latency_ms: 1000
+  alert_latency_ms: 1500
+  collect_metrics: true

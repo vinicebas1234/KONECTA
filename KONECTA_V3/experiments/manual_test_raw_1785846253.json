@@ -1,0 +1,190 @@
+{
+  "config": {
+    "name": "manual_test_raw",
+    "description": "Manual test with RAW_XYZ features",
+    "features_type": "RAW_XYZ",
+    "model_type": "RandomForest",
+    "dataset_name": "synthetic",
+    "hyperparams": {
+      "n_estimators": 10
+    },
+    "version": "V3"
+  },
+  "timestamp": 1785846253.8076088,
+  "datetime": "2026-08-04T09:24:13.807609",
+  "train_metrics": {
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "class_report": {
+      "CARRO": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 23.0
+      },
+      "CASA": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 24.0
+      },
+      "LIVRO": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 23.0
+      },
+      "accuracy": 1.0,
+      "macro avg": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 70.0
+      },
+      "weighted avg": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 70.0
+      }
+    },
+    "confusion_matrix": [
+      [
+        23,
+        0,
+        0
+      ],
+      [
+        0,
+        24,
+        0
+      ],
+      [
+        0,
+        0,
+        23
+      ]
+    ],
+    "n_samples": 70,
+    "val": {
+      "accuracy": 0.6,
+      "precision": 0.6900000000000001,
+      "recall": 0.6,
+      "f1": 0.588095238095238,
+      "class_report": {
+        "CARRO": {
+          "precision": 0.6,
+          "recall": 0.75,
+          "f1-score": 0.6666666666666666,
+          "support": 4.0
+        },
+        "CASA": {
+          "precision": 0.5,
+          "recall": 0.6666666666666666,
+          "f1-score": 0.5714285714285714,
+          "support": 3.0
+        },
+        "LIVRO": {
+          "precision": 1.0,
+          "recall": 0.3333333333333333,
+          "f1-score": 0.5,
+          "support": 3.0
+        },
+        "accuracy": 0.6,
+        "macro avg": {
+          "precision": 0.7000000000000001,
+          "recall": 0.5833333333333333,
+          "f1-score": 0.5793650793650794,
+          "support": 10.0
+        },
+        "weighted avg": {
+          "precision": 0.6900000000000001,
+          "recall": 0.6,
+          "f1-score": 0.588095238095238,
+          "support": 10.0
+        }
+      },
+      "confusion_matrix": [
+        [
+          3,
+          1,
+          0
+        ],
+        [
+          1,
+          2,
+          0
+        ],
+        [
+          1,
+          1,
+          1
+        ]
+      ],
+      "n_samples": 10
+    }
+  },
+  "val_metrics": null,
+  "test_metrics": {
+    "accuracy": 0.35,
+    "precision": 0.3666666666666666,
+    "recall": 0.35,
+    "f1": 0.35494505494505496,
+    "class_report": {
+      "CARRO": {
+        "precision": 0.25,
+        "recall": 0.3333333333333333,
+        "f1-score": 0.2857142857142857,
+        "support": 6.0
+      },
+      "CASA": {
+        "precision": 0.16666666666666666,
+        "recall": 0.14285714285714285,
+        "f1-score": 0.15384615384615385,
+        "support": 7.0
+      },
+      "LIVRO": {
+        "precision": 0.6666666666666666,
+        "recall": 0.5714285714285714,
+        "f1-score": 0.6153846153846154,
+        "support": 7.0
+      },
+      "accuracy": 0.35,
+      "macro avg": {
+        "precision": 0.3611111111111111,
+        "recall": 0.34920634920634913,
+        "f1-score": 0.3516483516483517,
+        "support": 20.0
+      },
+      "weighted avg": {
+        "precision": 0.3666666666666666,
+        "recall": 0.35,
+        "f1-score": 0.35494505494505496,
+        "support": 20.0
+      }
+    },
+    "confusion_matrix": [
+      [
+        2,
+        3,
+        1
+      ],
+      [
+        5,
+        1,
+        1
+      ],
+      [
+        1,
+        2,
+        4
+      ]
+    ],
+    "n_samples": 20
+  },
+  "cross_signer_metrics": null,
+  "training_time": 0.032450199127197266,
+  "notes": "Manual end-to-end test"
+}

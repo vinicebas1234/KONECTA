@@ -1,0 +1,190 @@
+{
+  "config": {
+    "name": "manual_test_raw",
+    "description": "Manual test with RAW_XYZ features",
+    "features_type": "RAW_XYZ",
+    "model_type": "RandomForest",
+    "dataset_name": "synthetic",
+    "hyperparams": {
+      "n_estimators": 10
+    },
+    "version": "V3"
+  },
+  "timestamp": 1785846233.2707684,
+  "datetime": "2026-08-04T09:23:53.270768",
+  "train_metrics": {
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "class_report": {
+      "CARRO": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 23.0
+      },
+      "CASA": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 24.0
+      },
+      "LIVRO": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 23.0
+      },
+      "accuracy": 1.0,
+      "macro avg": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 70.0
+      },
+      "weighted avg": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 70.0
+      }
+    },
+    "confusion_matrix": [
+      [
+        23,
+        0,
+        0
+      ],
+      [
+        0,
+        24,
+        0
+      ],
+      [
+        0,
+        0,
+        23
+      ]
+    ],
+    "n_samples": 70,
+    "val": {
+      "accuracy": 0.3,
+      "precision": 0.23500000000000001,
+      "recall": 0.3,
+      "f1": 0.2634920634920635,
+      "class_report": {
+        "CARRO": {
+          "precision": 0.4,
+          "recall": 0.5,
+          "f1-score": 0.4444444444444444,
+          "support": 4.0
+        },
+        "CASA": {
+          "precision": 0.25,
+          "recall": 0.3333333333333333,
+          "f1-score": 0.2857142857142857,
+          "support": 3.0
+        },
+        "LIVRO": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1-score": 0.0,
+          "support": 3.0
+        },
+        "accuracy": 0.3,
+        "macro avg": {
+          "precision": 0.21666666666666667,
+          "recall": 0.27777777777777773,
+          "f1-score": 0.24338624338624337,
+          "support": 10.0
+        },
+        "weighted avg": {
+          "precision": 0.23500000000000001,
+          "recall": 0.3,
+          "f1-score": 0.2634920634920635,
+          "support": 10.0
+        }
+      },
+      "confusion_matrix": [
+        [
+          2,
+          2,
+          0
+        ],
+        [
+          1,
+          1,
+          1
+        ],
+        [
+          2,
+          1,
+          0
+        ]
+      ],
+      "n_samples": 10
+    }
+  },
+  "val_metrics": null,
+  "test_metrics": {
+    "accuracy": 0.35,
+    "precision": 0.3322222222222222,
+    "recall": 0.35,
+    "f1": 0.33723776223776225,
+    "class_report": {
+      "CARRO": {
+        "precision": 0.2,
+        "recall": 0.16666666666666666,
+        "f1-score": 0.18181818181818182,
+        "support": 6.0
+      },
+      "CASA": {
+        "precision": 0.3333333333333333,
+        "recall": 0.2857142857142857,
+        "f1-score": 0.3076923076923077,
+        "support": 7.0
+      },
+      "LIVRO": {
+        "precision": 0.4444444444444444,
+        "recall": 0.5714285714285714,
+        "f1-score": 0.5,
+        "support": 7.0
+      },
+      "accuracy": 0.35,
+      "macro avg": {
+        "precision": 0.3259259259259259,
+        "recall": 0.3412698412698412,
+        "f1-score": 0.3298368298368299,
+        "support": 20.0
+      },
+      "weighted avg": {
+        "precision": 0.3322222222222222,
+        "recall": 0.35,
+        "f1-score": 0.33723776223776225,
+        "support": 20.0
+      }
+    },
+    "confusion_matrix": [
+      [
+        1,
+        2,
+        3
+      ],
+      [
+        3,
+        2,
+        2
+      ],
+      [
+        1,
+        2,
+        4
+      ]
+    ],
+    "n_samples": 20
+  },
+  "cross_signer_metrics": null,
+  "training_time": 0.03758406639099121,
+  "notes": "Manual end-to-end test"
+}
