@@ -46,8 +46,12 @@ def class_summaries(db: sqlite3.Connection, project_id: int) -> list[dict]:
     rows = db.execute(
         """
         SELECT c.id, c.name, c.slug, c.position, c.created_at,
-               COALESCE(SUM(CASE WHEN e.kind = 'image' AND e.source = 'upload' THEN 1 END), 0) AS images,
-               COALESCE(SUM(CASE WHEN e.kind = 'video' AND e.source = 'upload' THEN 1 END), 0) AS videos,
+               -- Conta por TIPO, não por origem: um vídeo gravado pela webcam
+               -- é vídeo igual a um arrastado da pasta. Filtrar por
+               -- source='upload' aqui zerava a contagem de quem grava pelo app
+               -- e deixava o botão de treinar desabilitado para sempre.
+               COALESCE(SUM(CASE WHEN e.kind = 'image' THEN 1 END), 0) AS images,
+               COALESCE(SUM(CASE WHEN e.kind = 'video' THEN 1 END), 0) AS videos,
                COALESCE(SUM(CASE WHEN e.source = 'webcam' THEN 1 END), 0) AS captures,
                COUNT(e.id) AS total
         FROM classes c

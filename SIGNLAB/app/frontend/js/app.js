@@ -29,11 +29,19 @@ const MODEL_LABELS = { rf: 'Random Forest', mlp: 'MLP', bilstm: 'BiLSTM', lstm: 
 const MODEL_MODALITY = { rf: 'image', mlp: 'image', bilstm: 'video', lstm: 'video' };
 
 function classKindCounts(clsId) {
-  const all = state.examples[clsId] || [];
-  return {
-    images: all.filter(e => e.kind === 'image').length,
-    videos: all.filter(e => e.kind === 'video').length,
-  };
+  const all = state.examples[clsId];
+  if (all !== undefined) {
+    return {
+      images: all.filter(e => e.kind === 'image').length,
+      videos: all.filter(e => e.kind === 'video').length,
+    };
+  }
+  // Exemplos são carregados sob demanda: sem esta parte, uma classe que o
+  // usuário ainda não abriu contava zero, e o botão de treinar ficava
+  // desabilitado mesmo com o projeto cheio. Os totais por tipo já vêm do
+  // servidor em cada classe.
+  const cls = (state.project?.classes || []).find(c => c.id === clsId);
+  return { images: cls?.images || 0, videos: cls?.videos || 0 };
 }
 
 /* ===== Utilidades ===== */
