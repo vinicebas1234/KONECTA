@@ -38,8 +38,11 @@ node_modules/
 KONECTA_V3/.venv/
 KONECTA_V3/.venv-temporal/
 KONECTA_V3/.git.repo-local-backup/
+# Modelos exportados do SIGNLAB (.zip, ~1MB) SAO versionados: sao o unico
+# artefato que nao se recria sem regravar tudo. Perdemos um assim uma vez.
 KONECTA_V3/models/*
 !KONECTA_V3/models/LEIA-ME.md
+!KONECTA_V3/models/*.zip
 KONECTA_V3/logs/
 KONECTA_V3/.mypy_cache/
 KONECTA_V3/.pytest_cache/

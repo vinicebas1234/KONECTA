@@ -65,7 +65,24 @@ funcionando normalmente e os temporais avisam no log.
 **Nunca instale `tensorflow` ou `keras` na `.venv` principal** — quebra o
 reconhecimento inteiro, inclusive o estático.
 
-## Esta pasta não vai para o git
+## Os `.zip` VÃO para o git
 
-Modelos são binários grandes e mudam a cada treino. O `.gitignore` do projeto
-ignora o conteúdo daqui — só este LEIA-ME é versionado.
+Mudou depois de uma perda: os `.zip` exportados são versionados. São ~1MB cada e
+são o único artefato que **não se recria sem regravar tudo** — perdemos um
+modelo junto com as 50 gravações que o treinaram, e não havia de onde tirar.
+
+O resto da pasta continua ignorado (`.keras` e `.joblib` soltos, extrações
+temporárias). Depois de copiar um `.zip` novo aqui:
+
+```
+git add KONECTA_V3/models/*.zip && git commit -m "Modelo treinado" && git push
+```
+
+## As gravações também precisam de cópia
+
+`SIGNLAB/projects` e `SIGNLAB/data` estão no `.gitignore` e nunca foram
+versionados. `C:\KONECTA\BACKUP_SIGNLAB.bat` copia os dois para
+`C:\KONECTA_BACKUP\<data>\` e roda sozinho a cada abertura do app.
+
+Ele usa `/E` e não `/MIR`: espelhar apagaria do backup o que sumiu da origem —
+exatamente o acidente contra o qual ele existe.

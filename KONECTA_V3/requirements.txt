@@ -20,6 +20,7 @@ PyYAML>=6.0
 PyQt5>=5.15.0
 
 # Providers e infraestrutura
+anthropic>=0.40.0     # motor_claude_logic (validacao contextual)
 joblib>=1.3.0          # carrega os modelos exportados pelo SIGNLAB
 aiohttp>=3.9.0         # cliente do avatar e das APIs de legenda
 keyring>=24.0.0        # credenciais no Gerenciador do Windows (nunca em arquivo)

@@ -48,6 +48,7 @@ import yaml
 from app_central.capture.audio import TAXA as TAXA_AUDIO
 from app_central.capture.audio import CapturaAudioWorker
 from app_central.capture.cameras import listar_cameras
+from app_central.core.avaliacao import Avaliacao
 from app_central.core.config import Config
 from app_central.core.estabilizador import Estabilizador
 from app_central.core.sessao import Estado, GerenciadorSessao, rotulo
@@ -99,6 +100,10 @@ class KonectaIntelligenceHub(QMainWindow):
         self.candidato_label = None
         self.avatar_view = None
         self.vocabulario_label = None
+        self.avaliacao = None
+        self.avaliacao_label = None
+        self.botao_avaliar = None
+        self._avaliacao_inicio = 0.0
         # a palavra na tela so' muda quando um sinal e' CONFIRMADO
         self._sinal_exibido = ""
         self._confianca_exibida = 0.0
@@ -399,11 +404,95 @@ class KonectaIntelligenceHub(QMainWindow):
         titulo.setStyleSheet("font-size: 10px; font-weight: bold; color: #555;")
         coluna.addWidget(titulo)
         coluna.addLayout(self._criar_seletor_camera())
+        coluna.addWidget(self._criar_painel_avaliacao())
         coluna.addWidget(self._criar_preview())
         coluna.addWidget(self._create_signal_label())
         coluna.addWidget(self._criar_label_candidato())
         coluna.addWidget(self._criar_label_vocabulario())
         return coluna
+
+
+    # ─────────────────────────────────────────────────────────────
+    # Medição de acurácia: alvo sorteado antes, gabarito garantido
+    # ─────────────────────────────────────────────────────────────
+
+    def _criar_painel_avaliacao(self) -> QLabel:
+        """Mostra qual sinal fazer durante uma medição."""
+        self.avaliacao_label = QLabel("")
+        self.avaliacao_label.setAlignment(Qt.AlignCenter)  # type: ignore[attr-defined]
+        self.avaliacao_label.setWordWrap(True)
+        self.avaliacao_label.setStyleSheet(
+            "background: #2d3a8c; color: white; border-radius: 6px;"
+            "padding: 8px; font-size: 15px; font-weight: bold;"
+        )
+        self.avaliacao_label.hide()
+        return self.avaliacao_label
+
+    def _alternar_avaliacao(self) -> None:
+        if self.avaliacao is not None:
+            self._encerrar_avaliacao()
+            return
+
+        motor = self.motores.sinais_para_texto
+        export = getattr(motor, "_export", None)
+        if export is None or not export.classes:
+            self.avaliacao_label.setText("Sem modelo carregado — não há o que medir.")
+            self.avaliacao_label.show()
+            return
+
+        vocabulario = sorted(str(nome) for nome in export.classes.values())
+        rodadas = int(os.environ.get("KONECTA_RODADAS", "20"))
+        self.avaliacao = Avaliacao(vocabulario=vocabulario, rodadas_alvo=rodadas)
+        self.botao_avaliar.setText("Encerrar medição")
+        self.avaliacao_label.show()
+        self._proxima_rodada()
+        logger.info("Medição iniciada: %s rodadas, %s sinais", rodadas, len(vocabulario))
+
+    def _proxima_rodada(self) -> None:
+        alvo = self.avaliacao.proximo_alvo()
+        if alvo is None:
+            self._encerrar_avaliacao()
+            return
+        # o estabilizador precisa esquecer o sinal anterior, senão a repetição
+        # do mesmo alvo seria bloqueada por evitar_repeticao
+        self.estabilizador.sem_maos()
+        self._avaliacao_inicio = time.monotonic()
+        self.avaliacao_label.setText(
+            f"Faça o sinal:  {alvo.upper()}" + chr(10) +
+            f"rodada {self.avaliacao.numero_da_rodada} de {self.avaliacao.rodadas_alvo}"
+            f"   ·   acertos até aqui: {self.avaliacao.acertos}"
+        )
+
+    def _registrar_rodada(self, reconhecido: str, confianca: float) -> None:
+        """Chamado quando um sinal é confirmado durante a medição."""
+        rodada = self.avaliacao.registrar(
+            reconhecido, confianca, time.monotonic() - self._avaliacao_inicio
+        )
+        logger.info(
+            "medição: alvo=%s reconhecido=%s %s",
+            rodada.alvo,
+            rodada.reconhecido,
+            "ACERTOU" if rodada.acertou else "errou",
+        )
+        self._proxima_rodada()
+
+    def _encerrar_avaliacao(self) -> None:
+        avaliacao, self.avaliacao = self.avaliacao, None
+        self.botao_avaliar.setText("Medir acurácia")
+        if avaliacao is None or not avaliacao.rodadas:
+            self.avaliacao_label.hide()
+            return
+
+        try:
+            caminho = avaliacao.salvar_csv(Path(__file__).parent.parent / "avaliacoes")
+            onde = chr(10) + f"salvo em {caminho.name}"
+        except Exception as erro:
+            logger.warning("Não foi possível salvar o CSV: %s", erro)
+            onde = ""
+
+        self.avaliacao_label.setText(avaliacao.resumo().replace(chr(10), "   ") + onde)
+        self.history_display.setText(avaliacao.resumo())
+        logger.info("Medição encerrada — %s", avaliacao.resumo().replace(chr(10), " | "))
 
     def _criar_label_vocabulario(self) -> QLabel:
         """Lista os sinais que o modelo conhece.
@@ -691,11 +780,18 @@ class KonectaIntelligenceHub(QMainWindow):
         self.stop_btn.clicked.connect(self._stop_recognition)
         self.stop_btn.setEnabled(False)
 
+        self.botao_avaliar = QPushButton("Medir acurácia")
+        self.botao_avaliar.setToolTip(
+            "Sorteia sinais, mostra qual fazer e mede quantos o sistema acerta"
+        )
+        self.botao_avaliar.clicked.connect(self._alternar_avaliacao)
+
         clear_btn = QPushButton("Limpar")
         clear_btn.clicked.connect(self._clear_history)
 
         controls_layout.addWidget(self.start_btn)
         controls_layout.addWidget(self.stop_btn)
+        controls_layout.addWidget(self.botao_avaliar)
         controls_layout.addWidget(clear_btn)
         return controls_layout
 
@@ -865,6 +961,9 @@ class KonectaIntelligenceHub(QMainWindow):
         if confirmado is not None:
             self._sinal_exibido = confirmado.texto
             self._confianca_exibida = confirmado.confianca
+            # durante uma medição, cada confirmação fecha uma rodada
+            if self.avaliacao is not None:
+                self._registrar_rodada(confirmado.texto, confirmado.confianca)
 
         # Registrar cada predição é o que permite ajustar o limiar durante uma
         # sessão: sem isto, "não reconheceu nada" é indistinguível de "quase

@@ -41,6 +41,11 @@ if exist ".venv-temporal\Scripts\python.exe" (
     echo           .venv-temporal\Scripts\pip install keras tensorflow-cpu numpy
 )
 
+REM ---------- 3.5 backup das gravacoes ----------
+REM projects e data do SIGNLAB nao estao no git. Copia antes de abrir, porque
+REM ja perdemos 50 videos e o banco sem ter como recuperar.
+if exist "C:\KONECTA\BACKUP_SIGNLAB.bat" call "C:\KONECTA\BACKUP_SIGNLAB.bat"
+
 REM ---------- 4. avatar (audio para Libras) ----------
 REM Sobe apenas o SERVIDOR do TEXTO_PARA_LIBRAS, sem a janela dele: o avatar
 REM aparece embutido no KONECTA. Abrir o app completo criava uma segunda janela
