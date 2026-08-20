@@ -23,6 +23,9 @@ app_backend/backups/
 *.swp
 *.swo
 
-# Modelos treinados: binarios grandes, mudam a cada treino
+# Modelos treinados: os .keras e .joblib soltos ficam de fora (grandes, mudam a
+# cada treino). Os .zip exportados SAO versionados: ~1MB e sao o unico artefato
+# que nao se recria sem regravar tudo -- ja perdemos um junto com as gravacoes.
 models/*
 !models/LEIA-ME.md
+!models/*.zip

@@ -9,6 +9,9 @@ const Webcam = (() => {
   let captured = 0;
   let onCloseCb = null;
   let overlay = null;
+  // Camera escolhida na gravacao. Sem isto o navegador usa sempre a padrao,
+  // que costuma ser a do notebook mesmo com uma externa melhor plugada.
+  let cameraId = null;
 
   function el(id) { return overlay.querySelector(id); }
 
@@ -23,6 +26,10 @@ const Webcam = (() => {
     overlay.innerHTML = `
       <div class="modal webcam-modal">
         <h3>Webcam — ${className}</h3>
+        <div class="webcam-camera-pick">
+          <label>Câmera:</label>
+          <select data-cameras></select>
+        </div>
         <div class="webcam-stage">
           <video autoplay playsinline muted></video>
           <span class="rec-dot">REC</span>
@@ -53,14 +60,51 @@ const Webcam = (() => {
     if (initialMode !== 'photo') setMode(initialMode);
 
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480 }, audio: false,
-      });
-      el('video').srcObject = stream;
+      await iniciarCamera();
+      await listarCameras();
     } catch (err) {
       toast('Não foi possível acessar a webcam: ' + err.message, 'error');
       close();
     }
+  }
+
+  /* Abre (ou reabre) o stream na camera escolhida. */
+  async function iniciarCamera() {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    const video = { width: 640, height: 480 };
+    if (cameraId) video.deviceId = { exact: cameraId };
+    stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+    el('video').srcObject = stream;
+    // o deviceId real so' aparece depois que o stream abre
+    if (!cameraId) {
+      const trilha = stream.getVideoTracks()[0];
+      cameraId = trilha && trilha.getSettings ? trilha.getSettings().deviceId : null;
+    }
+  }
+
+  /* Preenche o seletor. Os rotulos so' vem depois de permissao concedida,
+     por isso listamos DEPOIS de abrir o stream. */
+  async function listarCameras() {
+    const seletor = el('[data-cameras]');
+    if (!seletor) return;
+    const dispositivos = await navigator.mediaDevices.enumerateDevices();
+    const cameras = dispositivos.filter(d => d.kind === 'videoinput');
+    if (cameras.length < 2) {
+      seletor.closest('.webcam-camera-pick').style.display = 'none';
+      return;
+    }
+    seletor.innerHTML = cameras.map((c, i) =>
+      `<option value="${c.deviceId}"${c.deviceId === cameraId ? ' selected' : ''}>` +
+      `${c.label || 'Câmera ' + (i + 1)}</option>`).join('');
+    seletor.addEventListener('change', async () => {
+      if (recorder) toggleRecord();   // nao troca no meio de uma gravacao
+      cameraId = seletor.value;
+      try {
+        await iniciarCamera();
+      } catch (err) {
+        toast('Não foi possível abrir esta câmera: ' + err.message, 'error');
+      }
+    });
   }
 
   function onClick(e) {

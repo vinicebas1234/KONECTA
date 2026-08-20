@@ -885,3 +885,7 @@ main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 80px; }
   main { padding: 20px 14px 60px; }
   .class-grid { grid-template-columns: 1fr; }
 }
+
+/* Seletor de camera no modal de gravacao */
+.webcam-camera-pick { display:flex; align-items:center; gap:8px; margin:-4px 0 10px; font-size:13px; color:#555; }
+.webcam-camera-pick select { flex:1; padding:4px 6px; border:1px solid #ccc; border-radius:4px; font-size:13px; }
