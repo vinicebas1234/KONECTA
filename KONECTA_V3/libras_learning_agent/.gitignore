@@ -4,3 +4,8 @@ __pycache__/
 *.pyc
 logs/*.log
 vision/assets/*.task
+
+# Ciclo 7: artefatos de modelo (.npz de referências DTW) são gerados pelo
+# treino, não código-fonte — regeneráveis via `ml/training.build_model_version`,
+# não fazem sentido versionados (binário, pode crescer bastante por versão).
+models/
