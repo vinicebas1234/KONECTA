@@ -17,3 +17,6 @@ mediapipe>=0.8.11
 
 # Ciclo 3 (pesquisa web) — busca no DuckDuckGo, gratuita e sem API key/cadastro.
 ddgs>=9.0.0
+
+# Ciclo 4 (comparação de fontes) — SDK oficial do Google Gemini (tier gratuito).
+google-genai>=1.0.0

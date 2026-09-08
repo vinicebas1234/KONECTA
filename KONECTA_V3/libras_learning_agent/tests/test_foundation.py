@@ -222,6 +222,19 @@ def test_settings_repr_masks_anthropic_api_key() -> None:
     assert settings.anthropic_api_key == secret
 
 
+def test_settings_repr_masks_gemini_api_key() -> None:
+    """Mesmo teste acima, para `gemini_api_key` (Ciclo 4) — mesmo padrão de mascaramento."""
+    from libras_learning_agent.core.config import Settings
+
+    secret = "AIzaSyThisIsTotallyASecretFakeGeminiKey123456"
+    settings = Settings(_env_file=None, gemini_api_key=secret)
+
+    assert secret not in repr(settings)
+    assert secret not in str(settings)
+    assert secret not in json.dumps(settings.model_dump())
+    assert settings.gemini_api_key == secret
+
+
 def test_logging_never_leaks_anthropic_api_key(tmp_path: Path) -> None:
     from libras_learning_agent.core.config import Settings
     from libras_learning_agent.core.logging_setup import configure_logging
