@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_dir: str = "./libras_learning_agent/logs"
 
+    # --- API HTTP (Ciclo 6) --- porta própria, nunca 8000 (app_backend/vision_lab
+    # já usam essa porta) — ver api/app.py.
+    api_port: int = 8010
+
     # --- Anthropic --- reaproveita a env var já usada no resto do projeto,
     # por isso o alias explícito ignora o prefixo LLA_.
     anthropic_api_key: Optional[str] = Field(
