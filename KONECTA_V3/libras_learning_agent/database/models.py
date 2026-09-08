@@ -56,6 +56,32 @@ class Source(Base):
         return f"<Source id={self.id} title={self.title!r}>"
 
 
+class SignalSource(Base):
+    """Vínculo Signal<->Source: quais fontes sustentam um sinal candidato.
+
+    Ciclo 5 (`agent/learn_signal.py`): sem isso não dá para um humano revisar
+    um candidato em VALIDATION_REQUIRED e ver de onde ele veio.
+    `UniqueConstraint` evita duplicar o vínculo se `learn_signal` rodar de
+    novo sobre as mesmas fontes já registradas (dedup do Ciclo 3).
+    """
+
+    __tablename__ = "signal_sources"
+    __table_args__ = (
+        UniqueConstraint("signal_id", "source_id", name="uq_signal_sources_signal_id_source_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    signal_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("signals.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("sources.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<SignalSource signal_id={self.signal_id} source_id={self.source_id}>"
+
+
 class Video(Base):
     """Vídeo (remoto ou local) associado a uma fonte, candidato a extração de landmarks."""
 

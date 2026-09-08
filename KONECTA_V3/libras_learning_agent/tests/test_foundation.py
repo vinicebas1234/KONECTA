@@ -32,6 +32,7 @@ EXPECTED_TABLES = {
     "model_versions",
     "agent_tasks",
     "agent_events",
+    "signal_sources",  # Ciclo 5 (0002_add_signal_sources)
 }
 
 
@@ -158,6 +159,12 @@ def test_insert_and_read_row_in_every_table_with_valid_fks(tmp_path: Path) -> No
                     "('evt1', 'landmarks_extracted', :payload, :now)"
                 ),
                 {"now": now, "payload": json.dumps({"signal_id": "sig1"})},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO signal_sources (id, signal_id, source_id) VALUES "
+                    "('ss1', 'sig1', 'src1')"
+                )
             )
 
         with engine.connect() as conn:
