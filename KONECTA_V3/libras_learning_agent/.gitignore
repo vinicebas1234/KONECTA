@@ -3,3 +3,4 @@ data/*.db
 __pycache__/
 *.pyc
 logs/*.log
+vision/assets/*.task
