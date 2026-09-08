@@ -11,10 +11,12 @@ Rotas sob prefixo `/api/libras`, mais `GET /health` fora do prefixo.
 
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 from typing import Generator, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
 from fastapi.staticfiles import StaticFiles
@@ -36,6 +38,8 @@ from libras_learning_agent.api.schemas import (
     ModelPromoteResponse,
     ModelVersionDetail,
     ModelVersionSummary,
+    PredictResponse,
+    PredictionRankingItem,
     ResearchRequest,
     ResearchResponse,
     SignalOut,
@@ -46,7 +50,11 @@ from libras_learning_agent.api.schemas import (
 )
 from libras_learning_agent.database.db import get_db
 from libras_learning_agent.database.models import AgentEvent, ModelVersion, Signal, SignalSource, Source, TrainingRun
+from libras_learning_agent.ml.dataset import load_references
+from libras_learning_agent.ml.features import normalize_hand_landmarks
+from libras_learning_agent.ml.predict import predict as knn_predict
 from libras_learning_agent.research import SourceComparisonError, WebSearchError
+from libras_learning_agent.vision.hand_landmarks import extract_hand_landmarks
 
 # Estados de Signal.status: reaproveita as chaves de LEGAL_TRANSITIONS (Ciclo 2)
 # em vez de duplicar a lista — são exatamente os 11 estados documentados em
@@ -327,6 +335,101 @@ def stats(session: Session = Depends(get_session)) -> StatsResponse:
         signals_total=sum(signals_by_status.values()),
         models_by_status=models_by_status,
         models_total=sum(models_by_status.values()),
+    )
+
+
+# --------------------------------------------------------------------- Ciclo 11: predição ---
+#
+# Tamanho máximo do upload: 50MB. Um vídeo do V-LIBRASIL (poucos segundos,
+# 640x480) fica na casa de 1-5MB; 50MB dá folga generosa para vídeos mais
+# longos/alta resolução sem deixar um upload arbitrariamente grande (e caro
+# de gravar em disco + decodificar) passar batido.
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+# Extensões de contêiner de vídeo que o cv2.VideoCapture (backend FFmpeg)
+# tipicamente abre nesta stack. Não é uma lista de codecs suportados (isso
+# depende do build do FFmpeg) — é só o primeiro filtro, barato, para rejeitar
+# de cara o caso óbvio (ex. um .txt renomeado sem nem *essa* extensão). Se a
+# extensão bater mas o conteúdo não for um vídeo de verdade, quem barra depois
+# é o próprio extract_hand_landmarks (RuntimeError do cv2 -> 400 abaixo).
+_ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".wmv", ".flv"}
+
+
+def _get_production_model_or_409(session: Session) -> ModelVersion:
+    """O único ModelVersion "production" no momento — nunca "evaluated" nem
+    qualquer outro status, mesmo que mais recente (regra do Ciclo 8: promoção
+    é sempre decisão humana explícita via POST /models/{id}/promote, nunca
+    inferida aqui).
+    """
+    model = session.scalars(select(ModelVersion).where(ModelVersion.status == "production")).first()
+    if model is None:
+        raise IllegalTransitionError(
+            "Nenhum ModelVersion em produção. Promova um modelo primeiro: "
+            "POST /api/libras/models/{id}/promote."
+        )
+    return model
+
+
+@router.post("/predict", response_model=PredictResponse)
+async def predict_route(
+    file: UploadFile = File(...), k: int = 5, session: Session = Depends(get_session)
+) -> PredictResponse:
+    """Recebe um vídeo, extrai+normaliza landmarks (mesmo pipeline do resto do
+    LLA: `vision/hand_landmarks.py` + `ml/features.py`) e devolve o ranking
+    kNN/DTW (`ml/predict.py`) contra as referências do modelo em produção.
+
+    Ordem das checagens, da mais barata para a mais cara: (1) existe modelo
+    em produção? (2) extensão plausível de vídeo? (3) tamanho dentro do
+    limite? só então (4) grava em disco e roda a extração de verdade — de
+    longe o passo mais caro (MediaPipe frame a frame), por isso é o último
+    portão antes dele.
+    """
+    model = _get_production_model_or_409(session)
+
+    extension = Path(file.filename or "").suffix.lower()
+    if extension not in _ALLOWED_VIDEO_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Extensão de arquivo não suportada: {extension or '(nenhuma)'!r}. "
+                f"Esperado um destes: {sorted(_ALLOWED_VIDEO_EXTENSIONS)}"
+            ),
+        )
+
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Upload maior que o limite de {MAX_UPLOAD_BYTES // (1024 * 1024)}MB.",
+        )
+
+    tmp_path: Optional[str] = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=extension, delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+
+        try:
+            extraction = extract_hand_landmarks(tmp_path)
+        except (FileNotFoundError, RuntimeError) as erro:
+            # Vídeo inválido/ilegível (arquivo não é vídeo de verdade, codec
+            # não suportado etc.) é entrada ruim do usuário, não bug do LLA.
+            raise HTTPException(status_code=400, detail=f"Vídeo inválido: {erro}") from erro
+
+        sequence = normalize_hand_landmarks(extraction)
+        references = load_references(model.file_path)
+        ranking = knn_predict(references, sequence, k=k)
+    finally:
+        # Nunca deixa vídeo de usuário residindo em disco, sucesso ou erro.
+        if tmp_path is not None:
+            os.remove(tmp_path)
+
+    return PredictResponse(
+        model_version_id=model.id,
+        model_version=model.version,
+        ranking=[PredictionRankingItem(sign=sign, distance=distance) for sign, distance in ranking],
+        frame_count=extraction.frame_count,
+        detection_rate=extraction.detection_rate,
     )
 
 
