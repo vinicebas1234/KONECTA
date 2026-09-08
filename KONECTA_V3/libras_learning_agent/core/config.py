@@ -25,7 +25,7 @@ PACKAGE_DIR = Path(__file__).resolve().parents[1]
 
 _MASK = "***REDACTED***"
 # Campos que nunca podem aparecer em texto puro em repr/str/model_dump.
-_SECRET_FIELDS = frozenset({"anthropic_api_key"})
+_SECRET_FIELDS = frozenset({"anthropic_api_key", "gemini_api_key"})
 
 
 class Settings(BaseSettings):
@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     # por isso o alias explícito ignora o prefixo LLA_.
     anthropic_api_key: Optional[str] = Field(
         default=None, validation_alias="ANTHROPIC_API_KEY"
+    )
+
+    # --- Gemini --- camada de comparação de fontes (Ciclo 4) usa o tier
+    # gratuito do Google Gemini, não a Anthropic — mesmo padrão de alias
+    # explícito ignorando o prefixo LLA_.
+    gemini_api_key: Optional[str] = Field(
+        default=None, validation_alias="GEMINI_API_KEY"
     )
 
     # --- Segurança: mascaramento de segredos -----------------------------
