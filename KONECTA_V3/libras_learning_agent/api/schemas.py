@@ -133,3 +133,23 @@ class StatsResponse(BaseModel):
     signals_total: int
     models_by_status: dict[str, int]
     models_total: int
+
+
+# --------------------------------------------------------------------- Ciclo 11: predição ---
+
+
+class PredictionRankingItem(BaseModel):
+    sign: str
+    distance: float
+
+
+class PredictResponse(BaseModel):
+    # Rastreabilidade: qual ModelVersion (sempre o "production" no momento da
+    # chamada, nunca outro status — ver api/app.py::predict) gerou este ranking.
+    model_version_id: str
+    model_version: str
+    ranking: list[PredictionRankingItem]
+    # Reaproveitados de HandExtractionResult (vision/hand_landmarks.py), não
+    # recalculados: dizem ao chamador se a extração captou mão de verdade.
+    frame_count: int
+    detection_rate: float

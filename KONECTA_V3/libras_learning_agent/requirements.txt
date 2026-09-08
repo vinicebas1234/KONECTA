@@ -26,3 +26,8 @@ google-genai>=1.0.0
 fastapi>=0.100.0
 uvicorn[standard]>=0.23.0
 httpx>=0.24.0
+
+# Ciclo 11 (POST /api/libras/predict) — FastAPI exige python-multipart para
+# UploadFile. Neste ambiente já vinha instalado transitivamente (dependência
+# de `mcp`), mas isso não é garantido em outro venv só com este requirements.txt.
+python-multipart>=0.0.9
