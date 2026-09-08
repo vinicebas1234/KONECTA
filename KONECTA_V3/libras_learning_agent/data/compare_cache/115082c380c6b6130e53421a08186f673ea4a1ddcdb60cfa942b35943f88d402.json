@@ -1,0 +1,11 @@
+{
+  "concept": "computador",
+  "cached_at": "2026-09-08T21:24:33.600739+00:00",
+  "comparison": {
+    "classification": "UNKNOWN",
+    "confidence": 0.9,
+    "reasoning": "As fontes fornecidas não descrevem as propriedades fonológicas ou visuais (configuração de mão, ponto de articulação, movimento) do sinal de 'computador'. Elas apenas mencionam o termo em contextos de exemplo de uso ou em relação a ferramentas de software e dicionários, impossibilitando a comparação física do sinal para determinar concordância ou variação.",
+    "variants_mentioned": [],
+    "conflicts_mentioned": []
+  }
+}

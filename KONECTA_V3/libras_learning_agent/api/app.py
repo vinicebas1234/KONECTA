@@ -53,7 +53,7 @@ from libras_learning_agent.database.models import AgentEvent, ModelVersion, Sign
 from libras_learning_agent.ml.dataset import load_references
 from libras_learning_agent.ml.features import normalize_hand_landmarks
 from libras_learning_agent.ml.predict import predict as knn_predict
-from libras_learning_agent.research import SourceComparisonError, WebSearchError
+from libras_learning_agent.research import QuotaExceededError, SourceComparisonError, WebSearchError
 from libras_learning_agent.vision.hand_landmarks import extract_hand_landmarks
 
 # Estados de Signal.status: reaproveita as chaves de LEGAL_TRANSITIONS (Ciclo 2)
@@ -93,6 +93,22 @@ async def _handle_external_service_error(request: Request, exc: Exception) -> JS
 
 app.exception_handler(WebSearchError)(_handle_external_service_error)
 app.exception_handler(SourceComparisonError)(_handle_external_service_error)
+
+
+@app.exception_handler(QuotaExceededError)
+async def _handle_quota_exceeded(request: Request, exc: QuotaExceededError) -> JSONResponse:
+    # Mesmo 502 de qualquer outra falha de serviço externo (Ciclo 12: cota
+    # esgotada não é bug do LLA, é o mesmo family de "serviço externo falhou"
+    # que WebSearchError/SourceComparisonError já cobrem) — só o `detail`
+    # muda, com uma dica explícita de "tente mais tarde" em vez de deixar
+    # quem chama adivinhar a partir do texto cru do erro do Gemini. Starlette
+    # despacha por MRO exato (`_lookup_exception_handler`), então este handler
+    # mais específico já vence o de `SourceComparisonError` acima para
+    # instâncias de `QuotaExceededError` sem precisar remover o genérico.
+    return JSONResponse(
+        status_code=502,
+        content={"detail": f"{exc}. Tente novamente mais tarde — a cota reseta a cada 24h."},
+    )
 
 
 @app.exception_handler(ValueError)
