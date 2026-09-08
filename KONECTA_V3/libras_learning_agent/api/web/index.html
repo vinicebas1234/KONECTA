@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Libras Learning Agent — Fila de Validação</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <header class="topbar">
+        <h1>🧠 Libras Learning Agent</h1>
+        <nav class="tabs">
+            <a href="#/" class="tab-link" data-tab="queue">Fila de validação</a>
+            <a href="#/models" class="tab-link" data-tab="models">Modelos</a>
+        </nav>
+    </header>
+
+    <section id="stats" class="stats">Carregando estatísticas…</section>
+
+    <section class="research-box">
+        <h2>Disparar pesquisa nova</h2>
+        <p class="warning">
+            ⚠️ Isso chama a API do Gemini de verdade e <strong>consome a cota diária gratuita
+            (20 chamadas/dia/modelo)</strong>. Pode falhar com erro 502 se a cota já tiver
+            acabado. Não use para testes triviais.
+        </p>
+        <form id="research-form">
+            <input type="text" id="research-concept" placeholder="Conceito/sinal a pesquisar (ex. ABACAXI)" required>
+            <button type="submit">Pesquisar sinal</button>
+        </form>
+        <div id="research-result"></div>
+    </section>
+
+    <main id="view">
+        <!-- preenchido por app.js conforme a rota (#/ fila, #/candidates/:id detalhe, #/models) -->
+    </main>
+
+    <script src="/app.js"></script>
+</body>
+</html>

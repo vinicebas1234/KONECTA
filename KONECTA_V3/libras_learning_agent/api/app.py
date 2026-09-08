@@ -11,11 +11,13 @@ Rotas sob prefixo `/api/libras`, mais `GET /health` fora do prefixo.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Generator, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -329,3 +331,13 @@ def stats(session: Session = Depends(get_session)) -> StatsResponse:
 
 
 app.include_router(router)
+
+# --------------------------------------------------------------------- Ciclo 10: UI web ---
+#
+# Fila de validação (api/web/index.html + app.js + styles.css, sem framework,
+# fetch() puro) montada em "/" via StaticFiles(html=True). Registrada DEPOIS
+# de app.include_router(router): FastAPI/Starlette casam rotas pela ordem de
+# registro, então /health e /api/libras/* (já registradas acima) continuam
+# sendo resolvidas pelas suas rotas específicas antes de qualquer request
+# cair neste Mount "coringa".
+app.mount("/", StaticFiles(directory=Path(__file__).parent / "web", html=True), name="web")
