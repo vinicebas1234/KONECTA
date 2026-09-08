@@ -20,3 +20,9 @@ ddgs>=9.0.0
 
 # Ciclo 4 (comparação de fontes) — SDK oficial do Google Gemini (tier gratuito).
 google-genai>=1.0.0
+
+# Ciclo 6 (API HTTP isolada) — mesmas faixas mínimas do requirements.txt da
+# raiz do KONECTA_V3, para não introduzir divergência de versão.
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+httpx>=0.24.0
