@@ -1,5 +1,6 @@
 .venv/
 data/*.db
+data/compare_cache/
 __pycache__/
 *.pyc
 logs/*.log

@@ -26,20 +26,33 @@ não havia fonte nenhuma pra comparar), nunca como fallback de erro.
 
 Controle de custo: só title/url/snippet de cada `Source` vão no prompt —
 nunca o conteúdo bruto da página (que este projeto nem baixa).
+
+Ciclo 12 (cache + erro de cota diferenciado): antes de qualquer chamada real,
+`compare_sources` checa `research/cache.py` (arquivo local sob
+`data_dir/compare_cache/`, TTL configurável via `Settings.compare_cache_ttl_days`)
+— mesmo `concept` + mesmo conjunto de `sources` não gasta cota do tier
+gratuito de novo. Uma falha 429 especificamente por cota esgotada (tier
+gratuito: 20 chamadas/dia/modelo) levanta `QuotaExceededError` (subtipo de
+`SourceComparisonError`), detectado via `google.genai.errors.APIError.code`/
+`.status` (estruturado, nunca parsing de string da mensagem) — permite quem
+chama (`learn_signal`, `POST /research`) diferenciar "cota acabou, tente
+amanhã" de qualquer outra falha real de API/rede.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel
 
 from libras_learning_agent.core.config import get_settings
 from libras_learning_agent.database.models import Source
+from libras_learning_agent.research.cache import read_cached, write_cache
 
 # Vocabulário fixo do projeto para comparação de fontes — valor fora daqui é
 # erro (`SourceComparisonError`), nunca aceito silenciosamente.
@@ -55,6 +68,21 @@ class SourceComparisonError(Exception):
     Nunca é engolida em silêncio para virar um `SourceComparison` fabricado
     — ver docstring do módulo.
     """
+
+    is_quota_exceeded: bool = False
+
+
+class QuotaExceededError(SourceComparisonError):
+    """Cota diária do tier gratuito do Gemini esgotada (429 RESOURCE_EXHAUSTED).
+
+    Subtipo de `SourceComparisonError` para quem só faz `except SourceComparisonError`
+    continuar funcionando sem mudança — quem quer diferenciar "cota acabou" de
+    qualquer outra falha checa `isinstance(erro, QuotaExceededError)` ou
+    `erro.is_quota_exceeded`. Detecção via `google.genai.errors.APIError.code`/
+    `.status` (ver `compare_sources`), nunca regex sobre a mensagem de erro.
+    """
+
+    is_quota_exceeded: bool = True
 
 
 @dataclass
@@ -144,10 +172,14 @@ def compare_sources(
     """Pede ao Gemini para classificar a relação entre `sources` sobre `concept`.
 
     `sources` vazia devolve `UNKNOWN` sem chamar a API (nada para comparar —
-    economiza uma chamada à toa). `api_key` sobrescreve `settings.gemini_api_key`
-    (usado por testes para forçar uma chave inválida sem tocar a env var real
-    do processo). Qualquer falha de API/rede/parsing levanta
-    `SourceComparisonError` — nunca um resultado fabricado.
+    economiza uma chamada à toa). Antes de qualquer chamada real, checa o
+    cache local (`research/cache.py`) por `concept` + este exato conjunto de
+    `sources`; só chama a API se não houver entrada válida (dentro do TTL).
+    `api_key` sobrescreve `settings.gemini_api_key` (usado por testes para
+    forçar uma chave inválida sem tocar a env var real do processo). Qualquer
+    falha de API/rede/parsing levanta `SourceComparisonError` — nunca um
+    resultado fabricado; 429 especificamente por cota esgotada levanta o
+    subtipo `QuotaExceededError`.
     """
     if not sources:
         return SourceComparison(
@@ -155,6 +187,10 @@ def compare_sources(
             confidence=0.0,
             reasoning=f"Nenhuma fonte encontrada para {concept!r} — nada para comparar.",
         )
+
+    cached = read_cached(concept, sources)
+    if cached is not None:
+        return SourceComparison(**cached)
 
     key = api_key if api_key is not None else get_settings().gemini_api_key
     if not key:
@@ -173,22 +209,36 @@ def compare_sources(
                 response_schema=_GeminiResponseSchema,
             ),
         )
-    except Exception as erro:  # SDK externo: rede/auth/rate-limit podem falhar de formas variadas
+    except genai_errors.APIError as erro:
+        # Detecção estruturada (código HTTP + `status` da API, ambos campos
+        # do SDK) — nunca parsing frágil da mensagem, que pode mudar de texto
+        # a qualquer momento sem aviso. `code`/`status` vêm de
+        # `google.genai.errors.APIError.__init__`, populados a partir do
+        # corpo JSON real da resposta HTTP do Google.
+        if erro.code == 429 or erro.status == "RESOURCE_EXHAUSTED":
+            raise QuotaExceededError(
+                f"Cota diária do Gemini (tier gratuito, 20 chamadas/dia/modelo) esgotada ao "
+                f"comparar fontes de {concept!r}: {erro}"
+            ) from erro
+        raise SourceComparisonError(
+            f"Falha ao chamar a API do Gemini para comparar fontes de {concept!r}: {erro}"
+        ) from erro
+    except Exception as erro:  # SDK externo: rede/auth podem falhar de outras formas
         raise SourceComparisonError(
             f"Falha ao chamar a API do Gemini para comparar fontes de {concept!r}: {erro}"
         ) from erro
 
     parsed = response.parsed
-    if isinstance(parsed, _GeminiResponseSchema):
-        return _to_comparison(parsed)
+    if not isinstance(parsed, _GeminiResponseSchema):
+        # `.parsed` não veio populado (resposta fora do schema) — tenta
+        # parsear o JSON cru manualmente, com erro claro se vier mal formado.
+        try:
+            parsed = _GeminiResponseSchema.model_validate(json.loads(response.text))
+        except Exception as erro:
+            raise SourceComparisonError(
+                f"Resposta do Gemini não pôde ser parseada como JSON válido: {response.text!r} ({erro})"
+            ) from erro
 
-    # `.parsed` não veio populado (resposta fora do schema) — tenta parsear
-    # o JSON cru manualmente, com erro claro se vier mal formado.
-    try:
-        parsed = _GeminiResponseSchema.model_validate(json.loads(response.text))
-    except Exception as erro:
-        raise SourceComparisonError(
-            f"Resposta do Gemini não pôde ser parseada como JSON válido: {response.text!r} ({erro})"
-        ) from erro
-
-    return _to_comparison(parsed)
+    comparison = _to_comparison(parsed)
+    write_cache(concept, sources, asdict(comparison))
+    return comparison

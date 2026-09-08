@@ -71,6 +71,13 @@ class Settings(BaseSettings):
         default=None, validation_alias="GEMINI_API_KEY"
     )
 
+    # --- Cache de compare_sources (Ciclo 12) --- TTL em dias para uma entrada
+    # de cache em `research/cache.py` (sob `data_dir/compare_cache/`) ser
+    # considerada válida. 7 dias por padrão: a relação entre fontes sobre um
+    # conceito de Libras não muda de um dia para o outro, mas é ajustável via
+    # LLA_COMPARE_CACHE_TTL_DAYS se o projeto decidir outro valor.
+    compare_cache_ttl_days: int = 7
+
     # --- Segurança: mascaramento de segredos -----------------------------
     #
     # Requisito: logar o objeto Settings inteiro por engano nunca pode expor

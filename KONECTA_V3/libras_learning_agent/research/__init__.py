@@ -8,10 +8,15 @@ Ciclo 4 (comparação de fontes via Gemini, tier gratuito): `compare_sources`
 classifica a relação entre `Source` já registrados (MATCH/VARIATION/
 CONFLICT/UNKNOWN) — nunca decide promoção/validação, isso é humano. Sem
 chamada à API da Anthropic/Claude em nenhum dos dois ciclos.
+
+Ciclo 12 (cache + cota diferenciada): `compare_sources` cacheia localmente
+(`research/cache.py`) e levanta `QuotaExceededError` (subtipo de
+`SourceComparisonError`) quando o 429 é especificamente cota esgotada.
 """
 
 from libras_learning_agent.research.compare_sources import (
     CLASSIFICATIONS,
+    QuotaExceededError,
     SourceComparison,
     SourceComparisonError,
     compare_sources,
@@ -21,6 +26,7 @@ from libras_learning_agent.research.web_search import SearchResult, WebSearchErr
 
 __all__ = [
     "CLASSIFICATIONS",
+    "QuotaExceededError",
     "SearchResult",
     "SourceComparison",
     "SourceComparisonError",
