@@ -79,3 +79,57 @@ class ValidationRequest(BaseModel):
     decision: str
     validator: str
     notes: Optional[str] = None
+
+
+# --------------------------------------------------------------------- Ciclo 8: progresso/acurácia ---
+
+
+class ModelVersionSummary(BaseModel):
+    """Resumo de um `ModelVersion` — `top1_accuracy`/`top5_accuracy` são extraídos
+    de `metrics` com `.get()` defensivo (não presume que todo `metrics` tem
+    exatamente esse formato; um ciclo futuro pode gravar métricas diferentes).
+    """
+
+    id: str
+    version: str
+    dataset_version: Optional[str] = None
+    signals_count: Optional[int] = None
+    status: str
+    created_at: datetime
+    top1_accuracy: Optional[float] = None
+    top5_accuracy: Optional[float] = None
+
+
+class TrainingRunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    dataset_version: str
+    base_model: Optional[str] = None
+    status: str
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    metrics: Optional[dict[str, Any]] = None
+
+
+class ModelVersionDetail(ModelVersionSummary):
+    # dict `metrics` inteiro (o resumo acima só expõe top1/top5). `training_runs`:
+    # não há FK entre ModelVersion e TrainingRun hoje, então é a lista de
+    # TrainingRun com o mesmo dataset_version — correspondência, não vínculo garantido.
+    metrics: Optional[dict[str, Any]] = None
+    file_path: Optional[str] = None
+    training_runs: list[TrainingRunOut] = []
+
+
+class ModelPromoteResponse(ModelVersionSummary):
+    # Preenchido quando promover este modelo rebaixou automaticamente outro
+    # ModelVersion que estava em "production" pra "archived" (no máximo um
+    # "production" por vez no bookkeeping do LLA). None se não havia nenhum.
+    demoted_model_id: Optional[str] = None
+
+
+class StatsResponse(BaseModel):
+    signals_by_status: dict[str, int]
+    signals_total: int
+    models_by_status: dict[str, int]
+    models_total: int
