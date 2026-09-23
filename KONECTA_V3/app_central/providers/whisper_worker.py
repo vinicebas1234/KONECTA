@@ -75,7 +75,11 @@ def main() -> int:
         except Exception as erro:
             resposta = {"erro": f"{type(erro).__name__}: {erro}"}
 
-        saida.write(json.dumps(resposta, ensure_ascii=False) + "\n")
+        # JSON só em ASCII ("M\u00e3e"): o stdout de um pipe no Windows
+        # sai em cp1252 e o pai lê UTF-8. Com acento cru, "Mãe" e toda frase com
+        # "não" se perdiam -- só funcionava quando quem abria o app tinha
+        # PYTHONIOENCODING=utf-8, e o duplo clique no .bat não tem.
+        saida.write(json.dumps(resposta) + "\n")
         saida.flush()
 
 
