@@ -25,7 +25,7 @@ try:
 except ImportError:  # sem PyQtWebEngine o app roda sem o avatar embutido
     QtWebEngineWidgets = None  # type: ignore[assignment]
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont, QImage, QPixmap
 from PyQt5.QtWidgets import (
     QAction,
@@ -164,6 +164,12 @@ class KonectaIntelligenceHub(QMainWindow):
         self._setup_tray()
         self.gerenciador.observar(self._on_sessao_mudou)
 
+        # A publicação automática do SIGNLAB larga um .zip novo em models/
+        # quando o app de gravação recebe sinais; aqui ele entra sem reiniciar.
+        self._timer_modelo = QTimer(self)
+        self._timer_modelo.timeout.connect(self._verificar_modelo_novo)
+        self._timer_modelo.start(10_000)
+
     def _load_config(self) -> Dict:
         """Carrega a configuração do arquivo ``config/config.yaml``."""
         config_path = Path(__file__).parent / "config" / "config.yaml"
@@ -214,6 +220,9 @@ class KonectaIntelligenceHub(QMainWindow):
         # depois o que estiver em models/. O caminho normal é o segundo: exportar
         # no SIGNLAB e largar o arquivo lá.
         caminho_signlab = os.environ.get("KONECTA_MODELO_SIGNLAB", "")
+        # Modelo escolhido à mão pela variável: a troca a quente não mexe nele.
+        self._modelo_forcado = bool(caminho_signlab)
+        self._modelo_signlab = None
         if not caminho_signlab:
             descoberto = descobrir_modelo()
             if descoberto is not None:
@@ -223,6 +232,7 @@ class KonectaIntelligenceHub(QMainWindow):
         try:
             if caminho_signlab:
                 self.motores.sinais_para_texto = SinaisSignlab(caminho_modelo=caminho_signlab)
+                self._modelo_signlab = Path(caminho_signlab)
             else:
                 logger.warning(
                     "Nenhum modelo em %s — exporte um experimento no SIGNLAB e "
@@ -507,6 +517,41 @@ class KonectaIntelligenceHub(QMainWindow):
             "border-radius: 4px; padding: 4px;"
         )
         return self.vocabulario_label
+
+    def _verificar_modelo_novo(self) -> None:
+        """Troca o modelo sem reiniciar quando um .zip mais novo aparece em models/.
+
+        É o fim da linha da publicação automática: a gravação chega pelo app
+        do celular, o SIGNLAB treina e larga o .zip aqui.
+        """
+        if self._modelo_forcado:
+            return
+        novo = descobrir_modelo()
+        if novo is None or novo == self._modelo_signlab:
+            return
+        try:
+            motor = SinaisSignlab(caminho_modelo=str(novo))
+            # O construtor é preguiçoso e aceitaria um .zip corrompido; carregar
+            # antes de trocar mantém o modelo que funciona se o novo for ruim.
+            motor._carregar()
+        except Exception as erro:
+            logger.error("Modelo novo em models/ recusado (%s): %s", novo.name, erro)
+            self._modelo_signlab = novo  # não tentar o mesmo arquivo a cada 10s
+            return
+
+        antigo, self.motores.sinais_para_texto = self.motores.sinais_para_texto, motor
+        self._modelo_signlab = novo
+        self.estabilizador.sem_maos()  # candidato do modelo antigo não vale no novo
+        self._ajustar_hold_para_o_modelo()
+        self._mostrar_vocabulario()
+        logger.info("Modelo trocado a quente: %s", novo.name)
+        if self.tray is not None:
+            sinais = len(getattr(getattr(motor, "_export", None), "classes", None) or {})
+            self.tray.showMessage("KONECTA", f"Modelo atualizado: {sinais} sinais")
+        # Fora da thread da interface: liberar() espera a predição em curso.
+        liberar = getattr(antigo, "liberar", None)
+        if liberar is not None:
+            threading.Thread(target=liberar, daemon=True).start()
 
     def _mostrar_vocabulario(self) -> None:
         """Preenche a lista de sinais conhecidos, depois do modelo carregar."""

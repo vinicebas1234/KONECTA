@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0f172a">
+<title>SIGNLAB — Entrar</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+         background: #0f172a; color: #e2e8f0; font: 16px/1.5 system-ui, sans-serif; }
+  main { width: min(92vw, 380px); }
+  h1 { margin: 0 0 .5rem; font-size: 1.6rem; }
+  p { color: #94a3b8; }
+  label { display: block; margin: 1rem 0 .4rem; font-size: .9rem; color: #cbd5e1; }
+  input, button { width: 100%; box-sizing: border-box; padding: .8rem; border-radius: 10px;
+                  font: inherit; border: 1px solid #334155; }
+  input { background: #1e293b; color: inherit; }
+  button { margin-top: .8rem; background: #14b8a6; color: #042f2e; border: 0; font-weight: 600; }
+  .erro { color: #fca5a5; }
+</style>
+</head>
+<body>
+<main>
+  <h1>SIGNLAB</h1>
+  <p id="msg">Abra o link de acesso que você recebeu.</p>
+  <form id="form">
+    <label for="codigo">Ou cole o código de acesso</label>
+    <input id="codigo" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+    <button type="submit">Entrar</button>
+  </form>
+</main>
+<script>
+  const msg = document.getElementById('msg');
+
+  async function entrar(codigo) {
+    msg.className = '';
+    msg.textContent = 'Entrando…';
+    try {
+      const r = await fetch('/api/entrar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codigo }),
+      });
+      const dados = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(dados.detail || 'Código inválido.');
+      location.replace(dados.destino);
+    } catch (erro) {
+      msg.className = 'erro';
+      msg.textContent = erro.message;
+    }
+  }
+
+  // O código vem depois do "#": essa parte da URL não é enviada ao servidor
+  // nem fica nos logs. Tira da barra antes de seguir.
+  function codigoDoLink() {
+    const achado = location.hash.match(/codigo=([^&]+)/);
+    if (!achado) return;
+    history.replaceState(null, '', location.pathname);
+    entrar(decodeURIComponent(achado[1]));
+  }
+  codigoDoLink();
+  // Link novo com esta tela já aberta só troca o "#", sem recarregar.
+  addEventListener('hashchange', codigoDoLink);
+  document.getElementById('form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    entrar(document.getElementById('codigo').value.trim());
+  });
+</script>
+</body>
+</html>

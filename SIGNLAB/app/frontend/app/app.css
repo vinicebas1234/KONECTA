@@ -1,0 +1,98 @@
+:root {
+  color-scheme: dark;
+  --fundo: #0f172a;
+  --cartao: #1e293b;
+  --borda: #334155;
+  --texto: #e2e8f0;
+  --suave: #94a3b8;
+  --destaque: #14b8a6;
+  --destaque-texto: #042f2e;
+  --perigo: #ef4444;
+  --aviso: #f59e0b;
+  --ok: #22c55e;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--fundo);
+  color: var(--texto);
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+           env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+h1 { font-size: 1.4rem; margin: 0; }
+h2 { font-size: 1.2rem; margin: 0; }
+p { margin: .4rem 0; }
+.nota { color: var(--suave); font-size: .92rem; }
+.centro { text-align: center; margin-top: 40vh; color: var(--suave); }
+
+.tela { display: none; min-height: 100%; padding: 16px; }
+.tela.ativa { display: block; }
+
+button {
+  font: inherit; border: 0; border-radius: 12px; padding: .85rem 1rem;
+  cursor: pointer; min-height: 48px;
+}
+button:disabled { opacity: .5; }
+.primario { width: 100%; background: var(--destaque); color: var(--destaque-texto); font-weight: 600; }
+.secundario { background: var(--cartao); color: var(--texto); border: 1px solid var(--borda); }
+.link { background: none; color: var(--suave); padding: 0; min-height: 0; text-decoration: underline; }
+
+.cartao { max-width: 420px; margin: 8vh auto 0; }
+label { display: block; margin: 1.2rem 0 .4rem; color: #cbd5e1; }
+input {
+  width: 100%; padding: .85rem; border-radius: 12px; font: inherit;
+  background: var(--cartao); color: var(--texto); border: 1px solid var(--borda);
+  margin-bottom: 1rem;
+}
+
+.topo { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
+.faixa { background: var(--cartao); border-radius: 10px; padding: .6rem .8rem; font-size: .92rem; }
+.faixa.aviso { border-left: 4px solid var(--aviso); }
+.faixa.ok { border-left: 4px solid var(--ok); }
+.faixa.erro { border-left: 4px solid var(--perigo); }
+
+.sinais { list-style: none; padding: 0; margin: 12px 0 16px; display: grid; gap: 8px; }
+.sinais button {
+  width: 100%; text-align: left; background: var(--cartao); color: var(--texto);
+  border: 1px solid var(--borda); display: grid; gap: 6px;
+}
+.sinais .cabeca { display: flex; justify-content: space-between; gap: 8px; }
+.sinais .conta { color: var(--suave); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.barra { height: 6px; background: var(--borda); border-radius: 3px; overflow: hidden; }
+.barra i { display: block; height: 100%; background: var(--destaque); }
+.completo .barra i { background: var(--ok); }
+.vazio { color: var(--suave); text-align: center; padding: 1.5rem 0; }
+
+/* Gravação: quadro 4:3 ao lado dos controles em paisagem, empilhado em retrato */
+#tela-gravar.ativa { display: flex; flex-direction: column; gap: 12px; padding: 8px; height: 100vh; height: 100dvh; }
+.palco { position: relative; background: #000; border-radius: 12px; overflow: hidden; }
+#quadro { display: block; width: 100%; height: auto; aspect-ratio: 4 / 3; }
+/* Só a tela é espelhada: o vídeo gravado sai sem espelho, como a webcam do KONECTA */
+#quadro.espelho { transform: scaleX(-1); }
+.palco.gravando { outline: 4px solid var(--perigo); outline-offset: -4px; }
+.contagem {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 5rem; font-weight: 700; background: rgba(0, 0, 0, .35);
+}
+.gire {
+  position: absolute; left: 8px; right: 8px; bottom: 8px; text-align: center;
+  background: rgba(15, 23, 42, .85); border-radius: 8px; padding: .4rem; font-size: .9rem;
+}
+.controles { display: flex; flex-direction: column; gap: 10px; }
+.linha { display: flex; gap: 8px; }
+.linha button { flex: 1; }
+.gravar { background: var(--perigo); color: #fff; font-weight: 700; font-size: 1.15rem; min-height: 64px; }
+.gravar.parar { background: #fff; color: var(--perigo); }
+.aviso-gravacao { min-height: 1.5em; font-size: .95rem; }
+.aviso-gravacao.ok { color: #86efac; }
+.aviso-gravacao.erro { color: #fca5a5; }
+
+@media (orientation: landscape) and (max-height: 600px) {
+  #tela-gravar.ativa { flex-direction: row; }
+  .palco { height: calc(100dvh - 16px); aspect-ratio: 4 / 3; flex: none; }
+  #quadro { height: 100%; width: auto; }
+  .controles { flex: 1; justify-content: center; min-width: 0; }
+}

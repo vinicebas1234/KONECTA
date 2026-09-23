@@ -530,11 +530,30 @@ class SinaisSignlab(SinaisParaTextoProvider):
         indice = int(np.argmax(probabilidades))
         return self._export.nome_da_classe(indice), float(probabilidades[indice])
 
-    async def encerrar(self) -> None:
-        detector, self._detector = self._detector, None
-        if detector is not None:
+    def liberar(self) -> None:
+        """Fecha o detector e encerra o worker do Keras.
+
+        Pega os dois locks de propósito: com uma predição em curso, espera ela
+        terminar em vez de fechar o detector por baixo dela. Sem encerrar o
+        worker, cada troca de modelo a quente deixava para trás um processo
+        Python com o TensorFlow carregado.
+        """
+        with self._lock:
+            detector, self._detector = self._detector, None
+            if detector is not None:
+                try:
+                    detector.close()
+                except Exception:
+                    pass
+        with self._lock_processo:
+            processo, self._processo = self._processo, None
+        if processo is not None and processo.poll() is None:
             try:
-                detector.close()
+                processo.stdin.close()  # o worker sai limpo no EOF
+                processo.wait(timeout=3)
             except Exception:
-                pass
+                processo.kill()
         self._classificador = None
+
+    async def encerrar(self) -> None:
+        self.liberar()

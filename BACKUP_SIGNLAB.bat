@@ -21,7 +21,10 @@ set COPIADOS=0
 REM /XD pula o V-LIBRASIL: sao 11 GB que ja existem intactos em
 REM C:\KONECTA\Datasets e se reimportam com scripts\import_vlibrasil.py.
 REM Sem isto, cada dia de uso somaria 11 GB ao backup e o disco encheria em 3.
-REM O cache de landmarks (sequences) tambem sai: e' derivado, se recalcula.
+REM Os landmarks do V-LIBRASIL (sequences dentro dele) saem junto: derivados.
+REM ATENCAO: nos outros projetos, sequences NAO e' cache. As gravacoes do app
+REM de celular apagam o video e ficam so' como .npy la' - e' a unica copia.
+REM Nunca exclua sequences deste backup.
 if exist "%ORIGEM%\projects" (
     robocopy "%ORIGEM%\projects" "%ALVO%\projects" /E /XD "%ORIGEM%\projects\vlibrasil-completo" /NFL /NDL /NJH /NJS /NP >nul 2>&1
     if errorlevel 8 (echo   [AVISO] falha ao copiar projects) else (set COPIADOS=1)

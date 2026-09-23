@@ -9,6 +9,11 @@ const api = (() => {
       opts.body = JSON.stringify(body);
     }
     const res = await fetch(url, opts);
+    if (res.status === 401) {
+      // Cookie expirado ou código trocado: volta para a entrada.
+      location.href = '/entrar.html';
+      throw new Error('Acesso expirado');
+    }
     if (!res.ok) {
       let detail = res.statusText;
       try { detail = (await res.json()).detail || detail; } catch (_) {}

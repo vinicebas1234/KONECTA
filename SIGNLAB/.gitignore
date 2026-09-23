@@ -1,6 +1,10 @@
 __pycache__/
 *.pyc
 data/signlab.db
+# Codigos de acesso do app: vazar no GitHub = qualquer um grava e apaga.
+data/acesso.json
+data/app.json
+data/app_publicacao.json
 projects/
 .claude/settings.local.json
 node_modules/

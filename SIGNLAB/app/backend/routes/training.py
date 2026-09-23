@@ -428,6 +428,17 @@ async def predict(experiment_id: int, file: UploadFile,
 @router.get("/experiments/{experiment_id}/export")
 def export_experiment(experiment_id: int,
                       db: sqlite3.Connection = Depends(get_db)):
+    zip_path = build_export_zip(db, experiment_id)
+    return FileResponse(zip_path, media_type="application/zip",
+                        filename=f"signlab_experimento_{experiment_id}.zip")
+
+
+def build_export_zip(db: sqlite3.Connection, experiment_id: int) -> Path:
+    """Monta o .zip do export (modelo + metadata.json) e devolve o caminho.
+
+    Separado da rota porque a publicação automática do app (publicador.py)
+    gera o mesmo arquivo para largar em KONECTA_V3/models/.
+    """
     row, _ = load_experiment_model(db, experiment_id)
     model_path = PROJECTS_DIR / row["model_path"]
 
@@ -463,5 +474,4 @@ def export_experiment(experiment_id: int,
         zf.write(model_path, model_file)
         zf.writestr("metadata.json",
                     json.dumps(metadata, ensure_ascii=False, indent=2))
-    return FileResponse(zip_path, media_type="application/zip",
-                        filename=f"signlab_experimento_{experiment_id}.zip")
+    return zip_path

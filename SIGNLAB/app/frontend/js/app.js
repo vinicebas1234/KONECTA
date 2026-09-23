@@ -336,9 +336,11 @@ function viewExamples() {
   const classes = state.project.classes;
   let nImages = 0, nVideos = 0;
   for (const cls of classes) {
-    const items = state.examples[cls.id] || [];
-    nImages += items.filter(e => e.kind === 'image').length;
-    nVideos += items.filter(e => e.kind === 'video').length;
+    // classKindCounts cai nos totais do servidor: state.examples só enche sob
+    // demanda e o cabeçalho mostrava "Vídeos (0)" com o projeto cheio.
+    const kc = classKindCounts(cls.id);
+    nImages += kc.images;
+    nVideos += kc.videos;
   }
   return `
     <div class="media-tabs">

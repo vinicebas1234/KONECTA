@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<title>SIGNLAB Gravação</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icone-192.png">
+<link rel="apple-touch-icon" href="icone-192.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<section id="tela-carregando" class="tela ativa">
+  <p class="centro">Carregando…</p>
+</section>
+
+<section id="tela-nome" class="tela">
+  <div class="cartao">
+    <h1>Olá!</h1>
+    <p>Este app grava sinais de Libras para ensinar o KONECTA a reconhecê-los.</p>
+    <p class="nota">Do vídeo, só a posição das mãos é guardada. O vídeo é apagado
+      assim que chega no computador.</p>
+    <label for="campo-nome">Como você se chama?</label>
+    <input id="campo-nome" maxlength="40" autocomplete="given-name">
+    <button id="salvar-nome" class="primario">Continuar</button>
+  </div>
+</section>
+
+<section id="tela-lista" class="tela">
+  <header class="topo">
+    <div>
+      <h1 id="projeto-nome">Sinais</h1>
+      <button id="trocar-nome" class="link"></button>
+    </div>
+    <button id="instalar" class="secundario" hidden>Instalar</button>
+  </header>
+  <p id="faixa-conexao" class="faixa aviso" hidden></p>
+  <p id="faixa-fila" class="faixa aviso" hidden></p>
+  <p id="faixa-publicacao" class="faixa" hidden></p>
+  <ul id="sinais" class="sinais"></ul>
+  <button id="novo-sinal" class="primario">+ Novo sinal</button>
+</section>
+
+<section id="tela-gravar" class="tela">
+  <div class="palco">
+    <canvas id="quadro" width="640" height="480"></canvas>
+    <div id="contagem" class="contagem" hidden></div>
+    <div id="gire" class="gire" hidden>Gire o celular para a horizontal</div>
+  </div>
+  <div class="controles">
+    <div>
+      <h2 id="gravar-nome"></h2>
+      <p id="gravar-progresso" class="nota"></p>
+    </div>
+    <button id="botao-gravar" class="gravar">Gravar</button>
+    <div class="linha">
+      <button id="trocar-camera" class="secundario">Trocar câmera</button>
+      <button id="voltar" class="secundario">Voltar</button>
+    </div>
+    <p id="aviso" class="aviso-gravacao" role="status" aria-live="polite"></p>
+  </div>
+</section>
+
+<section id="tela-erro" class="tela">
+  <div class="cartao">
+    <h1>Não deu para abrir</h1>
+    <p id="erro-msg"></p>
+    <button id="tentar-de-novo" class="primario">Tentar de novo</button>
+  </div>
+</section>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -15,12 +15,13 @@ projects/<slug>/
 import re
 import shutil
 import unicodedata
+import os
 import uuid
 from pathlib import Path
 
 from .database import ROOT
 
-PROJECTS_DIR = ROOT / "projects"
+PROJECTS_DIR = Path(os.environ.get("SIGNLAB_PROJECTS", ROOT / "projects"))
 
 PROJECT_SUBDIRS = [
     "images", "videos", "landmarks", "sequences",

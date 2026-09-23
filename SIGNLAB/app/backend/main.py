@@ -9,9 +9,10 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from . import acesso, publicador
 from .database import init_db
 from .storage import PROJECTS_DIR
-from .routes import projects, classes, examples, training, cross_signer
+from .routes import projects, classes, examples, training, cross_signer, app_gravacao
 
 FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
 
@@ -20,11 +21,16 @@ FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
 async def lifespan(app: FastAPI):
     init_db()
     PROJECTS_DIR.mkdir(exist_ok=True)
+    acesso.codigos()  # gera data/acesso.json na primeira subida
+    publicador.iniciar()
     yield
 
 
 app = FastAPI(title="SIGNLAB", version="1.0.0", lifespan=lifespan)
+app.middleware("http")(acesso.exigir_acesso)
 
+app.include_router(acesso.router)
+app.include_router(app_gravacao.router)
 app.include_router(cross_signer.router)
 app.include_router(training.router)
 app.include_router(examples.router)

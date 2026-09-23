@@ -3,11 +3,13 @@
 Metadados (projetos, classes, exemplos) ficam no SQLite;
 arquivos grandes (imagens, vídeos) ficam no filesystem em projects/.
 """
+import os
 import sqlite3
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-DB_PATH = ROOT / "data" / "signlab.db"
+# Sobrescrevivel so' para os testes nao gravarem no banco de verdade.
+DB_PATH = Path(os.environ.get("SIGNLAB_DB", ROOT / "data" / "signlab.db"))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects (
@@ -69,6 +71,7 @@ CREATE INDEX IF NOT EXISTS idx_experiments_project ON experiments(project_id);
 
 
 def init_db() -> None:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)  # clone novo não tem data/
     con = sqlite3.connect(DB_PATH)
     try:
         con.executescript(SCHEMA)
